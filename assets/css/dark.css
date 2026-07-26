@@ -1,0 +1,748 @@
+/* =====================================================
+   Éléa-Secours — Mode sombre
+   -----------------------------------------------------
+   Activé par l'attribut data-theme="dark" sur <html>,
+   posé par assets/js/theme.js (choix mémorisé, sinon
+   réglage clair/sombre de l'ordinateur).
+
+   RÈGLE D'OR : le rendu des COURS ne change jamais.
+   Voir la section « ÎLOTS CLAIRS » en bas : la carte
+   d'activité (viewers) et le canvas (éditeur) gardent
+   leurs couleurs claires dans les deux thèmes.
+
+   Le préfixe :root[data-theme="dark"] donne une
+   spécificité supérieure : cette feuille prime quel que
+   soit son ordre de chargement.
+   ===================================================== */
+
+/* ============ 1. Variables ============ */
+/* L'échelle --gray-* est utilisée partout (style.css ET
+   includes/editor/editor-css.php). On l'INVERSE : ainsi
+   background:var(--gray-50) devient sombre et
+   color:var(--gray-800) devient clair, automatiquement. */
+:root[data-theme="dark"] {
+    color-scheme: dark;
+
+    --gray-50:  #1e293b;
+    --gray-100: #273548;
+    --gray-200: #334155;
+    --gray-300: #475569;
+    /* --gray-400/500 servent aux textes discrets : remontés pour rester lisibles sur fond sombre
+       (#64748b ne donnait qu'un ratio de 2.4 ; #94a3b8 → ~3.3). */
+    --gray-400: #94a3b8;
+    --gray-500: #aebccd;
+    --gray-600: #cbd5e1;
+    --gray-700: #e2e8f0;
+    --gray-800: #f1f5f9;
+    --gray-900: #f8fafc;
+
+    --bg-primary:   #0f172a;
+    --bg-secondary: #1e293b;
+    --bg-tertiary:  #273548;
+
+    --text-primary:   #e2e8f0;
+    --text-secondary: #cbd5e1;
+    --text-muted:     #94a3b8;
+
+    /* Texte accentué (liens/actions) : l'indigo de marque #4f46e5 est illisible sur fond
+       sombre (ratio 2.0) → version claire de la même teinte (ratio ~3.1). */
+    --accent-text: #818cf8;
+
+    /* Palette « TOUJOURS SOMBRE ». Volontairement NON redéclarée dans les îlots clairs (§6) :
+       c'est le seul moyen d'habiller le chrome qui se trouve À L'INTÉRIEUR d'un îlot
+       (en-tête d'activité, barre de navigation du CP), où var(--gray-*) renvoie du clair. */
+    --dk-surface:   #1e293b;
+    --dk-surface-2: #334155;
+    --dk-surface-3: #475569;
+    --dk-text:      #e2e8f0;
+    --dk-border:    #334155;
+
+    /* Encadrés colorés posés en STYLE INLINE dans view.php (impossible à surcharger en CSS
+       sans !important) : on y écrit var(--x, <valeur claire>). Ces variables n'existant qu'ici,
+       le thème clair retombe sur son fallback et reste strictement inchangé. */
+    --warn-bg:         #443b1a;   /* clair : #fff3cd */
+    --warn-text:       #fde68a;
+    --brand-soft-bg:   #2e2350;   /* clair : #f3f0ff */
+    --brand-soft-text: #c4b5fd;   /* clair : #5b21b6 */
+
+    /* Texte/bordure « danger » posés en inline (boutons − Ligne / − Colonne / Retirer l'audio) :
+       #c00 sur fond sombre ne donne qu'un ratio de 2.1 → rouge clair lisible. */
+    --danger-text:   #f87171;     /* clair : #c00 (fallback inline) */
+    --danger-border: rgba(248, 113, 113, 0.5); /* clair : #fcc (fallback inline) */
+
+    /* Violet des zones DragQuestion (sous-panneau) : #9c27b0 illisible sur fond sombre → lavande clair */
+    --dq-zone-text: #d8b4fe;      /* clair : #9c27b0 (fallback inline) */
+
+    /* Ombres plus marquées sur fond sombre */
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+    --shadow:    0 1px 3px 0 rgb(0 0 0 / 0.5), 0 1px 2px -1px rgb(0 0 0 / 0.4);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.5), 0 2px 4px -2px rgb(0 0 0 / 0.4);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.55), 0 4px 6px -4px rgb(0 0 0 / 0.4);
+    --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.6), 0 8px 10px -6px rgb(0 0 0 / 0.45);
+}
+
+/* ============ 2. Surfaces globales ============ */
+:root[data-theme="dark"] body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+/* ============ 3. Page de connexion (index.php) ============ */
+/* Le dégradé violet du fond est une couleur de marque : on le garde. */
+:root[data-theme="dark"] .login-card {
+    background-color: var(--bg-secondary);
+}
+:root[data-theme="dark"] .login-title {
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .login-subtitle {
+    color: var(--text-secondary);
+}
+:root[data-theme="dark"] .login-input {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-color: var(--gray-300);
+}
+
+/* ============ 3b. Viewers (prof + élève) ============ */
+:root[data-theme="dark"] .course-sidebar,
+:root[data-theme="dark"] .sidebar-header {
+    background-color: var(--bg-secondary);
+    border-color: var(--gray-200);
+}
+:root[data-theme="dark"] .sidebar-title,
+:root[data-theme="dark"] .sidebar-close {
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .nav-section {
+    border-bottom-color: var(--gray-200);
+}
+:root[data-theme="dark"] .nav-section-header {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .nav-link {
+    color: var(--text-secondary);
+}
+:root[data-theme="dark"] .nav-link:hover,
+:root[data-theme="dark"] .nav-item:hover {
+    background-color: var(--gray-100);
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .nav-item.active,
+:root[data-theme="dark"] .nav-link.active {
+    background-color: var(--gray-200);
+    color: var(--text-primary);
+}
+
+/* Menu clic-droit des éléments CP (.context-menu) : fond blanc EN DUR → texte clair illisible. */
+:root[data-theme="dark"] .context-menu {
+    background: var(--bg-secondary);
+    border-color: var(--gray-300);
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .context-menu-item.danger {
+    color: var(--danger-text, #f87171);
+}
+:root[data-theme="dark"] .context-menu-item.danger:hover {
+    background: rgba(239, 68, 68, 0.18);
+}
+
+/* ============ 4. Cartes / panneaux / modales génériques ============ */
+:root[data-theme="dark"] .card,
+:root[data-theme="dark"] .modal,
+:root[data-theme="dark"] .modal-content,
+:root[data-theme="dark"] .panel,
+:root[data-theme="dark"] .dropdown-menu,
+:root[data-theme="dark"] .popup {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--gray-200);
+}
+
+/* ---- Arborescence des cours permanents (accueil) ---- */
+:root[data-theme="dark"] .drive-tree,
+:root[data-theme="dark"] .drive-tree-folder,
+:root[data-theme="dark"] .folder-header,
+:root[data-theme="dark"] .folder-content {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--gray-200);
+}
+:root[data-theme="dark"] .folder-header:hover {
+    background-color: var(--gray-100);
+}
+/* Cours à l'intérieur d'un dossier déplié. Fonds/teintes en dur dans index.php.
+   La pastille verte de .is-cached (= cours déjà en cache) est conservée, mais en teinte
+   translucide : elle se pose sur le fond sombre du dossier au lieu du vert clair #f0fdf4. */
+:root[data-theme="dark"] .course-tree-item {
+    color: var(--text-secondary);
+    border-top-color: var(--gray-200);
+}
+:root[data-theme="dark"] .course-tree-item:hover {
+    background: rgba(59, 130, 246, 0.18);
+    color: #93c5fd;
+}
+:root[data-theme="dark"] .course-tree-item.is-cached {
+    background: rgba(34, 197, 94, 0.14);
+}
+:root[data-theme="dark"] .course-tree-item.is-cached:hover {
+    background: rgba(34, 197, 94, 0.26);
+}
+:root[data-theme="dark"] .course-tree-item .course-action {
+    color: #93c5fd;
+    border-color: #93c5fd;
+}
+:root[data-theme="dark"] .course-delete-btn:hover {
+    background: rgba(239, 68, 68, 0.28);
+}
+
+/* ---- Popups, dialogues et panneaux (connexion / accueil / admin) ---- */
+:root[data-theme="dark"] .prof-popup,
+:root[data-theme="dark"] .storage-card,
+:root[data-theme="dark"] .support-modal,
+:root[data-theme="dark"] .app-dialog,
+:root[data-theme="dark"] .course-loading-box {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--gray-200);
+}
+:root[data-theme="dark"] .storage-bar-container {
+    background-color: var(--gray-200);
+}
+/* ---- Modales du VIEWER (view.php) : « Code élève » et « Générer PDF » ----
+   Elles ne s'appellent ni .modal ni .modal-content : elles n'étaient donc couvertes par rien,
+   d'où un fond blanc EN DUR sous le texte clair du thème → texte invisible (ratio 1.23). */
+:root[data-theme="dark"] .modal-student-link,
+:root[data-theme="dark"] .pdf-modal {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .modal-header,
+:root[data-theme="dark"] .modal-footer {
+    border-color: var(--gray-200);
+}
+:root[data-theme="dark"] .pdf-modal h3 {      /* en dur : #333 */
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .pdf-status {        /* en dur : #666 */
+    color: var(--text-secondary);
+}
+:root[data-theme="dark"] .modal-close {
+    color: var(--text-muted);
+}
+:root[data-theme="dark"] .modal-close:hover {
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .btn-modal-close,
+:root[data-theme="dark"] .pdf-cancel-btn {    /* en dur : #f0f0f0, sous le texte clair → invisible */
+    background: var(--gray-200);
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .btn-modal-close:hover,
+:root[data-theme="dark"] .pdf-cancel-btn:hover {
+    background: var(--gray-300);
+}
+:root[data-theme="dark"] .pdf-progress-container {
+    background: var(--gray-200);
+}
+:root[data-theme="dark"] .spinner-small {     /* anneau #f0f0f0 + tête #5b21b6 (trop sombre ici) */
+    border-color: var(--gray-300);
+    border-top-color: var(--accent-text);
+}
+:root[data-theme="dark"] .student-url-box input {
+    background: var(--gray-100);
+    color: var(--text-primary);
+    border-color: var(--gray-300);
+}
+:root[data-theme="dark"] .support-close,
+:root[data-theme="dark"] .logout-btn,
+:root[data-theme="dark"] .support-btn {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .footer {
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+/* Barres et étapes (couleurs en dur) */
+:root[data-theme="dark"] .progress-bar-container {
+    background-color: var(--gray-200);
+}
+:root[data-theme="dark"] .loading-step {
+    background-color: var(--gray-100);
+    color: var(--text-primary);
+}
+/* Textes en dur (#333, #555, #666…) DANS les panneaux assombris : sinon illisibles.
+   NB : les pastilles de légende colorent leur `background`, pas leur `color` → sans risque. */
+:root[data-theme="dark"] .storage-title,
+:root[data-theme="dark"] .storage-total,
+:root[data-theme="dark"] .course-loading-title,
+:root[data-theme="dark"] .prof-popup h3,
+:root[data-theme="dark"] .prof-popup p,
+:root[data-theme="dark"] .support-modal h3,
+:root[data-theme="dark"] .support-modal p,
+:root[data-theme="dark"] .support-modal strong,
+:root[data-theme="dark"] .app-dialog h3,
+:root[data-theme="dark"] .app-dialog p,
+:root[data-theme="dark"] .app-dialog strong {
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .storage-legend span,
+:root[data-theme="dark"] .upload-zone small,
+:root[data-theme="dark"] .course-loading-cancel,
+:root[data-theme="dark"] .support-modal small {
+    color: var(--text-secondary);
+}
+
+/* Champs de saisie */
+:root[data-theme="dark"] input:not([type="color"]),
+:root[data-theme="dark"] textarea,
+:root[data-theme="dark"] select {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-color: var(--gray-300);
+}
+:root[data-theme="dark"] input::placeholder,
+:root[data-theme="dark"] textarea::placeholder {
+    color: var(--text-muted);
+}
+
+/* ============ 5. Éditeur ============ */
+/* Le gros du chrome de l'éditeur utilise déjà var(--gray-*)
+   → couvert par l'inversion. On rattrape les fonds en dur. */
+:root[data-theme="dark"] .ed-header,          /* barre « ← Retour + titre » des éditeurs d'activité */
+:root[data-theme="dark"] .cp-editor-header,   /* idem, éditeur Course Presentation */
+:root[data-theme="dark"] .cp-props-header,
+:root[data-theme="dark"] .structure-view,     /* vue « Structure du cours » */
+:root[data-theme="dark"] .structure-header,
+:root[data-theme="dark"] .structure-sections,
+:root[data-theme="dark"] .structure-section,
+:root[data-theme="dark"] .editor-header,
+:root[data-theme="dark"] .sidebar-left,
+:root[data-theme="dark"] .sidebar-right,
+:root[data-theme="dark"] .sidebar-footer,
+:root[data-theme="dark"] .tree-container,
+:root[data-theme="dark"] .canvas-wrapper,     /* la grande zone « Structure du cours » */
+:root[data-theme="dark"] .editor-canvas,
+:root[data-theme="dark"] .cp-props-panel,
+:root[data-theme="dark"] .cp-properties,
+:root[data-theme="dark"] .cp-editor-toolbar,
+:root[data-theme="dark"] .cp-slides-nav {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--gray-200);
+}
+/* Petits boutons d'action et badges d'icône de la vue structure (fonds blancs en dur) */
+:root[data-theme="dark"] .structure-btn,
+:root[data-theme="dark"] .structure-activity-icon {
+    background-color: var(--gray-100);
+    color: var(--text-primary);
+    border-color: var(--gray-300);
+}
+:root[data-theme="dark"] .structure-btn:hover {
+    background-color: var(--gray-200);
+}
+/* « Ajouter un template » : dégradé pastel vert→bleu en clair (editor-css.php, .import-btn--tpl),
+   sous un texte var(--gray-500) devenu clair en sombre → illisible. Même teinte, version sombre. */
+:root[data-theme="dark"] .import-btn--tpl {
+    background: linear-gradient(135deg, #14432a, #1e3a5f);
+    color: var(--text-primary);
+}
+/* En-têtes de section : dégradé clair EN DUR dans editor-css.php, alors que le nom de la
+   section est en var(--gray-800) → devenu blanc sur blanc en sombre. On redéclare le dégradé
+   (donc `background`, pas `background-color` : il faut bien remplacer le linear-gradient). */
+:root[data-theme="dark"] .structure-section-header {
+    background: linear-gradient(135deg, #1e293b 0%, #273548 100%);
+    border-bottom-color: var(--gray-200);
+}
+:root[data-theme="dark"] .structure-section-header:hover {
+    background: linear-gradient(135deg, #273548 0%, #334155 100%);
+}
+/* ---- Boutons de la barre d'outils du panneau Propriétés CP ----
+   Ces boutons ont un fond blanc/pastel EN DUR ; en sombre le texte devient clair
+   → blanc sur blanc (illisibles). On les repasse en sombre (mode clair inchangé).
+   `:not(.active)` préserve l'état actif (fond var(--primary) défini dans editor-css.php). */
+:root[data-theme="dark"] .rich-text-btn:not(.active),
+:root[data-theme="dark"] .rich-text-select,
+:root[data-theme="dark"] .cp-dq-bg-btn {
+    background: var(--gray-100);
+    color: var(--text-primary);
+    border-color: var(--gray-300);
+}
+:root[data-theme="dark"] .rich-text-btn:not(.active):hover,
+:root[data-theme="dark"] .cp-dq-bg-btn:hover {
+    background: var(--gray-200);
+}
+/* « 🧩 Charger image » : pastel violet clair en dur → déclinaison sombre de la même teinte */
+:root[data-theme="dark"] .cp-dq-blocks-btn {
+    background: linear-gradient(135deg, #2e2350, #1e3a5f);
+    color: #c4b5fd;
+    border-color: #6d28d9;
+}
+/* Panneau DragQuestion : conteneurs, cartes, badges et dropdowns avaient des fonds blancs/gris
+   clairs EN DUR → boîtes blanches à texte clair (illisibles) en mode sombre. */
+:root[data-theme="dark"] .cp-dq-editor-section-title,
+:root[data-theme="dark"] .cp-dq-item-card,
+:root[data-theme="dark"] .cp-dq-bg-actions,
+:root[data-theme="dark"] .cp-dq-bg-preview,
+:root[data-theme="dark"] .cp-dq-zones-dropdown-btn,
+:root[data-theme="dark"] .cp-dq-zones-dropdown {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--gray-300);
+}
+:root[data-theme="dark"] .cp-dq-element-preview,
+:root[data-theme="dark"] .cp-dq-zone-card,
+:root[data-theme="dark"] .cp-dq-item-num {
+    background: var(--gray-200);
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .cp-dq-zone-preview {
+    background: var(--warn-bg);
+    color: var(--warn-text);
+}
+/* Aperçu des réponses (QCM / Vrai-Faux / choix unique) : fond blanc (ou vert clair pour la
+   bonne réponse) EN DUR → boîte claire à texte clair invisible en sombre. */
+:root[data-theme="dark"] .tf-answer-item {
+    background: var(--gray-100);
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .tf-answer-item.correct {
+    background: rgba(34, 197, 94, 0.16);
+    border-color: rgba(34, 197, 94, 0.5);
+}
+/* ---- Éditeur d'ÉVALUATION (editor-quiz.js) ----
+   Cartes de questions, éditeurs riches, petits boutons : fonds blancs/pastels EN DUR
+   dans editor-css.php → panneau blanc à texte clair illisible en sombre. */
+:root[data-theme="dark"] .quiz-question-card,
+:root[data-theme="dark"] .qs-add-btn,
+:root[data-theme="dark"] .qs-image-size-label,
+:root[data-theme="dark"] .qs-btn-small,
+:root[data-theme="dark"] .qs-remove-image-btn {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--gray-300);
+}
+:root[data-theme="dark"] .qs-btn-small:hover {
+    background: var(--gray-100);
+}
+:root[data-theme="dark"] .qs-richtext-editor {
+    background: var(--gray-50);
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .qs-richtext-editor:focus {
+    background: var(--gray-100);
+}
+/* Éditeurs riches des activités « Trace résumée » (Blanks) et QCM/VF/MMC autonomes :
+   `.cp-blanks-richtext-editor:focus { background:#fafbff }` en dur → fond quasi-blanc AU FOCUS
+   (dès qu'on clique pour éditer) → texte clair illisible en sombre. Idem champ de recherche. */
+:root[data-theme="dark"] .cp-blanks-richtext-editor:focus {
+    background: var(--gray-100);
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .ed-search-input:focus {
+    background: var(--gray-100);
+    color: var(--text-primary);
+}
+/* Bleus très clairs (#eff6ff / #f0f7ff) des zones de feedback */
+:root[data-theme="dark"] .quiz-feedback-toggle:hover,
+:root[data-theme="dark"] .quiz-feedback-toggle.active {
+    background: #1e3a5f;
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .quiz-feedback-input {
+    background: var(--gray-100);
+    color: var(--text-primary);
+}
+/* Erreur de trou (rouge très clair, posé avec !important dans editor-css.php → idem ici) */
+:root[data-theme="dark"] .qs-gap-slot-error {
+    background: rgba(239, 68, 68, 0.18) !important;
+    color: #f87171 !important;
+}
+/* Badges [[n]] des mots à sélectionner : couleur PAR GROUPE posée en inline (palette de 8).
+   On garde l'identité de groupe mais on éclaircit l'ensemble pour rester lisible sur fond
+   sombre (l'indigo #4f46e5 ne donnait qu'un ratio de 2.3). */
+:root[data-theme="dark"] .qs-gap-choice-num,
+:root[data-theme="dark"] .qs-gap-summary-choice {
+    filter: brightness(1.6);
+}
+
+/* ---- Éditeur Vidéo interactive ----
+   En-tête et sidebar à fond blanc EN DUR + hovers pastel (#e0e7ff / #f0f0ff). */
+:root[data-theme="dark"] .iv-editor-header,
+:root[data-theme="dark"] .iv-sidebar {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--gray-200);
+}
+:root[data-theme="dark"] .iv-interaction-card:hover {
+    background: #1e3a5f;             /* clair : #e0e7ff */
+}
+:root[data-theme="dark"] .iv-add-interaction-btn:hover {
+    background: var(--gray-100);     /* clair : #f0f0ff */
+}
+
+/* ---- Éditeur Glisser-Déposer image (ddimageortext) ----
+   Chrome à fonds clairs EN DUR (editor-css.php). Le CANVAS lui-même (image de fond + zones)
+   est du CONTENU de cours → îlot clair conservé, avec texte foncé pour les indications. */
+:root[data-theme="dark"] .ddi-header-compact .ed-header-actions,
+:root[data-theme="dark"] .ddi-questiontext-section,
+:root[data-theme="dark"] .ddi-rt-heading {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--gray-300);
+}
+:root[data-theme="dark"] .ddi-canvas-wrap {
+    background: var(--gray-100);
+}
+:root[data-theme="dark"] .ddi-staging-col {
+    background: var(--gray-100);
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .ddi-zoom-bar {
+    background: rgba(30, 41, 59, 0.92);   /* clair : rgba(232,232,232,0.92) */
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .ddi-zoom-bar button {
+    background: var(--gray-100);
+    color: var(--text-primary);
+}
+:root[data-theme="dark"] .ddi-zoom-bar button:hover {
+    background: var(--gray-200);
+}
+/* Îlot : le canvas garde son fond clair d'origine, ses textes d'aide redeviennent foncés */
+:root[data-theme="dark"] #ddiCanvas {
+    color: #1e293b;
+}
+
+/* Éditeur miniature de tableau : c'est un aperçu du TABLEAU DU COURS (contenu, pas chrome).
+   On le garde clair (îlot) avec texte foncé → fidèle au rendu du cours et lisible. */
+:root[data-theme="dark"] .cp-table-props-wrapper {
+    background: #fff;
+    color: #1e293b;
+}
+:root[data-theme="dark"] .cp-table-props-wrapper td,
+:root[data-theme="dark"] .cp-table-props-wrapper th {
+    color: #1e293b;
+}
+/* Boutons annuler/répéter et titres des barres d'édition */
+:root[data-theme="dark"] .ed-undo-btn,
+:root[data-theme="dark"] .ed-redo-btn {
+    background-color: var(--gray-100);
+    color: var(--text-primary);
+    border-color: var(--gray-300);
+}
+:root[data-theme="dark"] .ed-title,
+:root[data-theme="dark"] .cp-editor-header h3,
+:root[data-theme="dark"] .cp-props-header h4,
+:root[data-theme="dark"] .activity-name-editable {
+    color: var(--text-primary);
+}
+/* Élément sélectionné dans l'arborescence (fond indigo très clair en thème clair) */
+:root[data-theme="dark"] .tree-activity.selected,
+:root[data-theme="dark"] .tree-section.selected {
+    background-color: var(--gray-200);
+    color: var(--text-primary);
+}
+
+/* Zone autour du canvas = chrome → sombre (le canvas lui-même reste clair) */
+:root[data-theme="dark"] .cp-canvas-container {
+    background-color: var(--bg-primary);
+}
+/* Boutons accentués de la barre CP : déclinaison sombre des dégradés pastel
+   (sinon le texte, éclairci par le thème, devient illisible sur le pastel clair). */
+:root[data-theme="dark"] .cp-toolbar-btn--quick {
+    background: linear-gradient(135deg, #1e3a5f, #14432a);
+}
+:root[data-theme="dark"] .cp-toolbar-btn--tpl {
+    background: linear-gradient(135deg, #4a3a1e, #4a2436);
+}
+/* Overlay de chargement : son fond blanc est posé en style inline → !important requis */
+:root[data-theme="dark"] #editorLoadingOverlay {
+    background-color: var(--bg-primary) !important;
+    color: var(--text-primary);
+}
+
+/* =====================================================
+   6. ÎLOTS CLAIRS — LE COURS NE CHANGE JAMAIS
+   -----------------------------------------------------
+   On y re-déclare les variables en CLAIR : tout élément
+   interne qui utilise var(--…) reste donc clair, et on
+   remet une couleur de texte foncée (sinon le texte du
+   cours hériterait du texte clair du thème sombre).
+   Les fonds propres du cours (.activity-wrapper: white,
+   .cp-canvas: #F5F5F5, .h5p-cp-slide: #F5F5F5) ne sont
+   PAS touchés : aucune règle sombre ne les cible.
+   ===================================================== */
+:root[data-theme="dark"] .activity-wrapper,
+:root[data-theme="dark"] .cp-canvas,
+:root[data-theme="dark"] .cp-slide-thumb,
+:root[data-theme="dark"] .mapmodules-inline-preview {  /* aperçu de la carte de progression (vue structure) */
+    color-scheme: light;
+
+    --gray-50:  #f9fafb;
+    --gray-100: #f3f4f6;
+    --gray-200: #e5e7eb;
+    --gray-300: #d1d5db;
+    --gray-400: #9ca3af;
+    --gray-500: #6b7280;
+    --gray-600: #4b5563;
+    --gray-700: #374151;
+    --gray-800: #1f2937;
+    --gray-900: #111827;
+
+    --bg-primary:   #f8fafc;
+    --bg-secondary: #ffffff;
+    --bg-tertiary:  #f1f5f9;
+
+    --text-primary:   #1e293b;
+    --text-secondary: #64748b;
+    --text-muted:     #94a3b8;
+    --accent-text:    #4f46e5;
+
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --shadow:    0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+}
+/* Couleur de texte héritée : on restitue EXACTEMENT celle du thème clair, sinon le texte
+   du cours hériterait du texte clair de body en mode sombre.
+   Les variables ci-dessus étant redéclarées en clair, ces var() donnent bien les valeurs claires.
+   (viewer  : assets/css/style.css        → body { color: var(--text-primary) }
+    éditeur : includes/editor/editor-css.php → body { color: var(--gray-800) })   */
+:root[data-theme="dark"] .activity-wrapper {
+    color: var(--text-primary);
+}
+/* NB : .cp-slide-thumb définit déjà sa propre couleur (#333) → on n'y touche pas,
+   sinon on la remplacerait et la vignette ne serait plus identique au thème clair. */
+:root[data-theme="dark"] .cp-canvas,
+/* L'aperçu de carte est un rendu du COURS (fond blanc + carte SVG orange, posés en inline dans
+   editor-core.js). En îlot, ses boutons superposés (👁 / ✏️ Éditer / 🗑, fond blanc inline)
+   retrouvent le texte foncé du thème clair : sans ça, « Éditer » sortait à un ratio de 1.23. */
+:root[data-theme="dark"] .mapmodules-inline-preview {
+    color: var(--gray-800);
+}
+/* Les champs DANS le cours (QCM, textes à trous…) restent clairs */
+:root[data-theme="dark"] .activity-wrapper input:not([type="color"]),
+:root[data-theme="dark"] .activity-wrapper textarea,
+:root[data-theme="dark"] .activity-wrapper select,
+:root[data-theme="dark"] .cp-canvas input:not([type="color"]),
+:root[data-theme="dark"] .cp-canvas textarea,
+:root[data-theme="dark"] .cp-canvas select {
+    background: #fff;
+    color: #333;
+    border-color: #d1d5db;
+}
+
+/* -----------------------------------------------------
+   6 bis. EXCEPTION : le CHROME situé DANS un îlot
+   -----------------------------------------------------
+   L'îlot protège le cours, mais la carte d'activité
+   contient aussi notre propre habillage : l'en-tête
+   « icône + nom de l'activité » (dessus) et la barre de
+   navigation du CP (dessous). Ce n'est pas le cours →
+   ça doit être sombre.
+   Ces éléments héritent des variables CLAIRES de l'îlot :
+   on utilise donc la palette --dk-* (§1), seule à rester
+   sombre à l'intérieur d'un îlot.
+   Le fond des diapositives (.h5p-cp-slide) n'est jamais
+   ciblé : le cours reste intact.
+   ----------------------------------------------------- */
+:root[data-theme="dark"] .activity-header {   /* assets/css/style.css → background: var(--gray-50) */
+    background: var(--dk-surface);
+    color: var(--dk-text);
+    border-bottom-color: var(--dk-border);
+}
+:root[data-theme="dark"] .h5p-cp-nav {        /* view.php → background: white */
+    background: var(--dk-surface);
+    color: var(--dk-text);
+    border-top-color: var(--dk-border);
+}
+:root[data-theme="dark"] .h5p-cp-nav-btn {    /* view.php → background: #f0f0f0 */
+    background: var(--dk-surface-2);
+    color: var(--dk-text);
+}
+:root[data-theme="dark"] .h5p-cp-nav-btn:hover {
+    background: var(--dk-surface-3);
+}
+/* Le nom de l'activité est un <h3> : il est repris par « h1..h6 { color: var(--text-primary) } »
+   (assets/css/style.css:88), donc en foncé dans l'îlot → il faut le forcer, sinon on obtient
+   du #1e293b sur #1e293b (invisible). Idem pour le compteur « 1 / 7 » (view.php → color: #666). */
+:root[data-theme="dark"] .activity-header .activity-title,
+:root[data-theme="dark"] .h5p-cp-progress {
+    color: var(--dk-text);
+}
+/* ---- Sommaire du viewer (view.php) ----
+   Le violet de marque #5b21b6 sert de couleur de TEXTE à l'élément actif : illisible sur la
+   sidebar sombre (ratio 1.15) → version claire de la teinte. Et les survols sont en dur
+   (#f5f5f5 / #f0f0f0) : ils flasheraient en blanc.
+   Spécificité : dark.css est chargé AVANT le <style> inline de view.php, donc à égalité c'est
+   l'inline qui gagne → on passe volontairement au-dessus (0,4,0 et 0,5,0). */
+:root[data-theme="dark"] .nav-item.active .nav-link {
+    color: var(--accent-text);
+}
+:root[data-theme="dark"] .nav-link:hover,
+:root[data-theme="dark"] .nav-section-header:hover {
+    background: var(--gray-100);
+}
+/* NB : .course-nav-bar (#5b21b6) et son bouton .nav-btn-next (blanc sur violet, ratio 8.98)
+   sont de la MARQUE, comme l'en-tête violet → volontairement laissés tels quels. */
+
+/* NB : en plein écran, le CP a déjà son propre habillage sombre en dur (view.php :
+   .h5p-coursepresentation:fullscreen .h5p-cp-nav {background:#333} …). Ces règles ont la même
+   spécificité (0,3,0) que les nôtres MAIS sont inline, donc chargées après dark.css : elles
+   gagnent. Le plein écran garde donc son rendu d'origine — c'est voulu. */
+
+/* =====================================================
+   7. Bouton de bascule (discret, toujours présent)
+   ===================================================== */
+.theme-toggle {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.65);
+    color: #334155;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    opacity: 0.45;
+    transition: opacity 0.2s, transform 0.2s, background 0.2s;
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+}
+/* Rangé à la suite des autres boutons d'en-tête (cas normal) */
+.theme-toggle--inline {
+    position: static;
+}
+/* Repli : aucun en-tête trouvé → flotte discrètement en haut à droite */
+.theme-toggle--floating {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 2147483000;
+}
+.theme-toggle:hover {
+    opacity: 1;
+    transform: scale(1.08);
+}
+.theme-toggle:focus-visible {
+    opacity: 1;
+    outline: 2px solid #6366f1;
+    outline-offset: 2px;
+}
+:root[data-theme="dark"] .theme-toggle {
+    background: rgba(30, 41, 59, 0.7);
+    color: #e2e8f0;
+    border-color: rgba(203, 213, 225, 0.3);
+}
+@media print {
+    .theme-toggle { display: none !important; }
+}
