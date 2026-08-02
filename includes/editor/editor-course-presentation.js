@@ -1572,7 +1572,9 @@ function _cpGetOffscreenCanvas() {
     _cpThumbCanvasWidth = w;
     var h = w / 2;
     // Utiliser le même fontSize que le vrai canvas (zoom-compensé)
-    var realFontSize = realCanvas ? realCanvas.style.fontSize : ((CP_ELEA_FONT_BASE || 18.5) + 'px');
+    // Même police que le vrai canvas (constante). Repli si le canvas n'a pas encore été mesuré,
+    // sinon la vignette hériterait d'une taille quelconque et ne refléterait pas la slide.
+    var realFontSize = (realCanvas && realCanvas.style.fontSize) || (CP_ELEA_FONT_BASE.toFixed(2) + 'px');
     
     if (_cpOffscreenInner && document.body.contains(_cpOffscreenInner)) {
         var parent = _cpOffscreenInner.parentElement;
@@ -5377,22 +5379,30 @@ function cpMergeAdjacentBgSpans(root) {
 // Tailles Éléa disponibles (em)
 var CP_FONT_SIZES = ['1em', '1.25em', '1.5em', '1.75em', '2.25em', '3em'];
 
-// Éléa/Moodle affiche H5P CoursePresentation avec font-size:16px (base H5P).
-// Dans l'éditeur, le canvas est zoomé avec transform:scale(zoom/100),
-// ce qui réduit visuellement la taille du texte.
-// On compense en divisant par le facteur de zoom pour que la taille
-// VISUELLE du texte corresponde exactement à Éléa.
-var CP_ELEA_FONT_BASE = 18.5; // taille de base Éléa en px (calibré pour correspondre à Éléa)
+// Le canvas a une taille de layout FIXE (CP_REF_WIDTH × CP_REF_HEIGHT) et n'est mis à
+// l'échelle que VISUELLEMENT par transform:scale() — le transform ne change aucune mesure
+// de mise en page. La police doit donc rester CONSTANTE : ce qui décide des retours à la
+// ligne (et donc du texte coupé), c'est le rapport taille-de-police / largeur-de-slide.
+//
+// AVANT : fontSize = 18.5 / zoom, pour garder une taille VISUELLE constante à l'écran.
+// Effet de bord : le rapport texte/slide changeait avec le zoom et ne correspondait à Éléa
+// qu'à 70 % pile — à 50 % le texte était 40 % trop gros, à 30 % 133 % trop gros (d'où des
+// phrases coupées et des barres de défilement absentes du lecteur), à 100 % 30 % trop petit.
+//
+// CP_ELEA_FONT_RATIO est la SEULE source de vérité, partagée avec le lecteur :
+// c'est le `font-size: 1.888cqi` de .h5p-cp-slide dans view.php (rendu calé sur Éléa).
+// Toute modification ici doit être répercutée là-bas, et inversement.
+var CP_ELEA_FONT_RATIO = 0.01888;
 var CP_REF_WIDTH = 1400; // largeur interne fixe du canvas éditeur
 var CP_REF_HEIGHT = 700;
+var CP_ELEA_FONT_BASE = CP_REF_WIDTH * CP_ELEA_FONT_RATIO; // 26.43px sur le canvas de 1400
 
 function cpUpdateBaseFontSize() {
     var inner = document.getElementById('cpCanvasInner');
     if (!inner) return;
-    var zoom = cpZoomLevel / 100;
-    if (zoom <= 0) zoom = 0.7;
-    var fontSize = CP_ELEA_FONT_BASE / zoom;
-    inner.style.fontSize = fontSize.toFixed(2) + 'px';
+    // Indépendant du zoom : le zoom agrandit/réduit la slide ENTIÈRE (texte compris),
+    // exactement comme le lecteur quand la fenêtre change de largeur.
+    inner.style.fontSize = CP_ELEA_FONT_BASE.toFixed(2) + 'px';
 }
 
 // Applique une taille fixe au canvas et un transform combiné (responsive + zoom)

@@ -528,7 +528,13 @@ body {
 .tree-activity-name.editing,
 .tree-section-name.editing,
 .activity-name-editable.editing {
-    background: white;
+    /* En cours de renommage. Le fond était `white` en dur : en mode sombre le texte reste
+       clair (hérité de l'arbre) → texte clair sur blanc, illisible (contraste mesuré 1.23).
+       --bg-secondary/--text-primary ne sont définis QUE par dark.css (style.css n'est pas
+       chargé dans l'éditeur) → en clair les fallbacks donnent le rendu d'origine à l'identique,
+       et dans un îlot clair ils sont re-déclarés en clair. */
+    background: var(--bg-secondary, white);
+    color: var(--text-primary, inherit);
     border: 1px solid var(--primary);
     border-radius: 4px;
     padding: 2px 6px;
@@ -635,7 +641,9 @@ body {
 }
 
 .editable-name.editing {
-    background: white;
+    /* même défaut que .tree-*-name.editing ci-dessus (renommage dans la vue structure) */
+    background: var(--bg-secondary, white);
+    color: var(--text-primary, inherit);
     border: 2px solid var(--primary);
     outline: none;
 }
@@ -1883,8 +1891,15 @@ body {
        emoji sur la 1re ligne débordait vers le haut et était coupé. Le rendu du texte normal
        est identique (1.5 × taille). Doit rester synchro avec .h5p-cp-text du viewer (view.php). */
     line-height: 1.5;
-    height: 100%;
-    overflow: auto;
+    /* Boîte calquée sur .h5p-cp-text du lecteur (view.php) : elle GRANDIT avec le texte
+       (height:auto) et c'est .cp-element-content qui rogne — exactement comme
+       .h5p-cp-element{overflow:hidden} côté lecteur.
+       AVANT : height:100% + overflow:auto → une barre de défilement apparaissait dans
+       l'éditeur là où le lecteur affiche le texte en entier ; elle volait en plus ~15px de
+       largeur, ce qui reprovoquait des retours à la ligne et coupait des phrases en bas. */
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
 }
 /* Interligne Entrée (p) vs Shift+Entrée (br) — aligné sur Éléa/H5P */
 .cp-text-element p,
@@ -1928,6 +1943,21 @@ body {
 .cp-element-text .cp-element-content {
     position: relative;
     z-index: 2;
+    /* .cp-element porte une bordure de 2px (transparente au repos) que le lecteur n'a pas :
+       en border-box elle rentre dans la boîte, donc le rognage tombait 2px trop haut et
+       l'éditeur coupait le texte AVANT le lecteur. On rend ces 2px du bas pour que le point
+       de coupe soit celui de .h5p-cp-element (mesuré : 1,99px d'écart → 0,01px). */
+    height: calc(100% + 2px);
+}
+
+/* En cours de frappe, on ne cache rien : le texte qui dépasse reste visible (au lieu d'être
+   rogné comme dans le lecteur, ou de scroller comme avant). L'élément passe au-dessus des
+   voisins le temps de l'édition. La bordure de l'élément montre où Éléa coupera. */
+.cp-element-text:has(> .cp-element-content > .cp-editable-text[contenteditable="true"]) {
+    z-index: 30;
+}
+.cp-element-text:has(> .cp-element-content > .cp-editable-text[contenteditable="true"]) .cp-element-content {
+    overflow: visible;
 }
 
 /* Éléments texte : pas de poignée séparée, tout l'élément est déplaçable */

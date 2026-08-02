@@ -424,8 +424,12 @@ function openTemplateMenu(btn) {
     
     // Positionner AU-DESSUS du bouton
     var rect = btn.getBoundingClientRect();
+    // Fond/texte via var(--x, fallback) : dark.css ne peut pas surcharger un style inline.
+    // Avec `background:white` en dur, le texte (clair, hérité de body en mode sombre) devenait
+    // illisible sur fond blanc (contraste mesuré 1.23).
     menu.style.cssText = 'position:fixed; left:' + rect.left + 'px; bottom:' + (window.innerHeight - rect.top) + 'px; ' +
-        'background:white; border:1px solid var(--gray-200); border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.15); ' +
+        'background:var(--bg-secondary, white); color:var(--text-primary, inherit); ' +
+        'border:1px solid var(--gray-200); border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.15); ' +
         'z-index:1000; min-width:220px; max-width:260px; max-height:300px; overflow-y:auto;';
     document.body.appendChild(menu);
     _templateMenuEl = menu;
@@ -451,9 +455,12 @@ function openTemplateMenu(btn) {
         menu.innerHTML = '';
         data.templates.forEach(function(tpl) {
             var item = document.createElement('div');
-            item.style.cssText = 'padding:8px 14px; cursor:pointer; font-size:0.85rem; display:flex; align-items:center; gap:8px; border-bottom:1px solid #f0f0f0;';
+            // --dk-border / --bg-tertiary ne sont définis QUE par dark.css : en thème clair les
+            // fallbacks redonnent EXACTEMENT les couleurs d'origine (#f0f0f0 / #f5f5f5).
+            // (Ne pas utiliser --gray-* ici : elles existent aussi en clair et décaleraient la teinte.)
+            item.style.cssText = 'padding:8px 14px; cursor:pointer; font-size:0.85rem; display:flex; align-items:center; gap:8px; border-bottom:1px solid var(--dk-border, #f0f0f0);';
             item.innerHTML = '<span>📋</span><span>' + escapeHtml(tpl.name) + '</span>';
-            item.onmouseover = function() { this.style.background = '#f5f5f5'; };
+            item.onmouseover = function() { this.style.background = 'var(--bg-tertiary, #f5f5f5)'; };
             item.onmouseout = function() { this.style.background = ''; };
             item.onclick = function(e) {
                 e.stopPropagation();
@@ -464,7 +471,7 @@ function openTemplateMenu(btn) {
         });
     })
     .catch(function() {
-        if (_templateMenuEl) menu.innerHTML = '<div style="padding: 10px 14px; color: #e53935; font-size: 0.85rem;">Erreur de chargement</div>';
+        if (_templateMenuEl) menu.innerHTML = '<div style="padding: 10px 14px; color: var(--danger-text, #e53935); font-size: 0.85rem;">Erreur de chargement</div>';
     });
 }
 
