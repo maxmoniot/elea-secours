@@ -766,40 +766,42 @@ function renderCoursePresentationEditor(activity) {
             </div>
             
             <div class="cp-editor-toolbar">
-                <span class="cp-toolbar-label">Ajouter :</span>
-                <button class="cp-toolbar-btn" onclick="cpAddElement('text')">
-                    <span class="cp-toolbar-btn-icon">📝</span> Texte
+                <button class="cp-toolbar-btn" onclick="cpAddElement('text')" title="Texte">
+                    <span class="cp-toolbar-btn-icon">📝</span><span class="cp-toolbar-btn-label">Texte</span>
                 </button>
-                <button class="cp-toolbar-btn" onclick="cpAddElement('image')">
-                    <span class="cp-toolbar-btn-icon">🖼️</span> Image
+                <button class="cp-toolbar-btn" onclick="cpAddElement('image')" title="Image">
+                    <span class="cp-toolbar-btn-icon">🖼️</span><span class="cp-toolbar-btn-label">Image</span>
                 </button>
-                <button class="cp-toolbar-btn" onclick="cpAddElement('video')">
-                    <span class="cp-toolbar-btn-icon">🎥</span> Vidéo
+                <button class="cp-toolbar-btn" onclick="cpAddElement('video')" title="Vidéo">
+                    <span class="cp-toolbar-btn-icon">🎥</span><span class="cp-toolbar-btn-label">Vidéo</span>
                 </button>
-                <button class="cp-toolbar-btn" onclick="cpAddElement('audio')">
-                    <span class="cp-toolbar-btn-icon">🔊</span> Audio
+                <button class="cp-toolbar-btn" onclick="cpAddElement('audio')" title="Audio">
+                    <span class="cp-toolbar-btn-icon">🔊</span><span class="cp-toolbar-btn-label">Audio</span>
                 </button>
-                <button class="cp-toolbar-btn" onclick="cpAddElement('dialogcards')">
-                    <span class="cp-toolbar-btn-icon">🃏</span> Cartes
+                <button class="cp-toolbar-btn" onclick="cpAddElement('dialogcards')" title="Cartes à retourner">
+                    <span class="cp-toolbar-btn-icon">🃏</span><span class="cp-toolbar-btn-label">Cartes</span>
                 </button>
-                <button class="cp-toolbar-btn" onclick="cpAddElement('multichoice')">
-                    <span class="cp-toolbar-btn-icon">☑️</span> QCM
+                <button class="cp-toolbar-btn" onclick="cpAddElement('multichoice')" title="QCM">
+                    <span class="cp-toolbar-btn-icon">☑️</span><span class="cp-toolbar-btn-label">QCM</span>
                 </button>
-                <button class="cp-toolbar-btn" onclick="cpAddElement('truefalse')">
-                    <span class="cp-toolbar-btn-icon">✅</span> Vrai/Faux
+                <button class="cp-toolbar-btn" onclick="cpAddElement('truefalse')" title="Vrai/Faux">
+                    <span class="cp-toolbar-btn-icon">✅</span><span class="cp-toolbar-btn-label">Vrai/Faux</span>
                 </button>
-                <button class="cp-toolbar-btn" onclick="cpAddElement('blanks')">
-                    <span class="cp-toolbar-btn-icon">📋</span> Trous
+                <button class="cp-toolbar-btn" onclick="cpAddElement('blanks')" title="Texte à trous">
+                    <span class="cp-toolbar-btn-icon">📋</span><span class="cp-toolbar-btn-label">Trous</span>
                 </button>
-                <button class="cp-toolbar-btn" onclick="cpAddElement('table')">
-                    <span class="cp-toolbar-btn-icon">▦</span> Tableau
+                <button class="cp-toolbar-btn" onclick="cpAddElement('exportabletextarea')" title="Zone de saisie libre (Exportable Text Area)">
+                    <span class="cp-toolbar-btn-icon">✍️</span><span class="cp-toolbar-btn-label">Saisie</span>
                 </button>
-                <button class="cp-toolbar-btn" onclick="cpAddElement('dragdrop')">
-                    <span class="cp-toolbar-btn-icon">🎯</span> Glisser
+                <button class="cp-toolbar-btn" onclick="cpAddElement('table')" title="Tableau">
+                    <span class="cp-toolbar-btn-icon">▦</span><span class="cp-toolbar-btn-label">Tableau</span>
+                </button>
+                <button class="cp-toolbar-btn" onclick="cpAddElement('dragdrop')" title="Glisser-déposer">
+                    <span class="cp-toolbar-btn-icon">🎯</span><span class="cp-toolbar-btn-label">Glisser</span>
                 </button>
                 <div class="cp-toolbar-dropdown" style="position: relative; display: inline-block;">
-                    <button class="cp-toolbar-btn" onclick="this.nextElementSibling.classList.toggle('open')">
-                        <span class="cp-toolbar-btn-icon">⬜</span> Forme ▾
+                    <button class="cp-toolbar-btn" onclick="this.nextElementSibling.classList.toggle('open')" title="Forme">
+                        <span class="cp-toolbar-btn-icon">⬜</span><span class="cp-toolbar-btn-label">Forme</span> ▾
                     </button>
                     <div class="cp-shape-dropdown-menu" style="display: none; position: absolute; top: 100%; left: 0; background: var(--bg-secondary, #fff); border: 1px solid var(--gray-200, #ddd); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 200; min-width: 130px;">
                         <div onclick="cpAddElement('shape-rectangle'); this.parentElement.classList.remove('open');" style="padding: 8px 12px; cursor: pointer; font-size: 0.8rem; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--gray-200, #eee);" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background=''">
@@ -814,8 +816,8 @@ function renderCoursePresentationEditor(activity) {
                     </div>
                 </div>
                 <div class="cp-toolbar-dropdown" style="position: relative; display: inline-block;">
-                    <button class="cp-toolbar-btn" onclick="cpToggleEmojiPicker(this)">
-                        <span class="cp-toolbar-btn-icon">😀</span> Emoji ▾
+                    <button class="cp-toolbar-btn" onclick="cpToggleEmojiPicker(this)" title="Emoji">
+                        <span class="cp-toolbar-btn-icon">😀</span><span class="cp-toolbar-btn-label">Emoji</span> ▾
                     </button>
                     <div class="cp-emoji-picker-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: var(--bg-secondary, #fff); border: 1px solid var(--gray-200, #ddd); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 200; width: 260px; max-height: 300px; overflow-y: auto; padding: 6px;">
                         <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px;">
@@ -823,13 +825,13 @@ function renderCoursePresentationEditor(activity) {
                     </div>
                 </div>
                 <div class="cp-toolbar-dropdown" style="position: relative; display: inline-block;">
-                    <button class="cp-toolbar-btn cp-toolbar-btn--quick" onclick="cpToggleQuickImageMenu(this)">
-                        <span class="cp-toolbar-btn-icon">⚡</span> Accès rapide ▾
+                    <button class="cp-toolbar-btn cp-toolbar-btn--quick" onclick="cpToggleQuickImageMenu(this)" title="Accès rapide">
+                        <span class="cp-toolbar-btn-icon">⚡</span><span class="cp-toolbar-btn-label">Accès rapide</span> ▾
                     </button>
                 </div>
                 <div class="cp-toolbar-dropdown" style="position: relative; display: inline-block;">
-                    <button class="cp-toolbar-btn cp-toolbar-btn--tpl" onclick="cpOpenTemplateMenu(this)">
-                        <span class="cp-toolbar-btn-icon">📋</span> Templates ▾
+                    <button class="cp-toolbar-btn cp-toolbar-btn--tpl" onclick="cpOpenTemplateMenu(this)" title="Templates">
+                        <span class="cp-toolbar-btn-icon">📋</span><span class="cp-toolbar-btn-label">Templates</span> ▾
                     </button>
                 </div>
             </div>
@@ -968,6 +970,12 @@ function cpRenderSlideElements(targetCanvas, overrideSlideIdx) {
         const style = `left: ${el.x ?? 10}%; top: ${el.y ?? 10}%; width: ${el.width ?? 30}%; height: ${el.height ?? 20}%;${rotStyle}`;
         
         let contentHtml = '';
+        // Filet de sécurité : une vidéo simple (H5P.Video) n'a pas de `case` dans le switch
+        // ci-dessous — elle tomberait dans `default:` et s'afficherait en étiquette grise,
+        // sans lecteur. La normalisation est faite au chargement, mais tous les chemins
+        // d'entrée ne l'appelaient pas (import sélectif, templates). On la refait ici :
+        // la fonction est idempotente, donc sans effet sur les vidéos déjà normalisées.
+        if (typeof convertVideoElementToIV === 'function') convertVideoElementToIV(el);
         const type = (el.action?.library || '').split(' ')[0].replace('H5P.', '').toLowerCase();
         const isTextElement = type === 'text' || type === 'advancedtext';
         
@@ -1258,6 +1266,20 @@ function cpRenderSlideElements(targetCanvas, overrideSlideIdx) {
                         <button class="cp-quiz-verify-btn">Vérifier</button>
                     </div>
                     <div class="cp-quiz-spacer"></div>
+                </div>`;
+                break;
+            case 'exportabletextarea':
+                // Aperçu fidèle au lecteur : consigne + champ de saisie (inerte sur le canvas)
+                // Même normalisation que le texte : couleur/surlignage posés sur un <strong>
+                // sont déplacés sur un <span>, sinon Éléa les supprime à l'import.
+                if (el.action?.params?.label) {
+                    var _fixedLabel = cpMoveStylesToSpan(el.action.params.label);
+                    if (_fixedLabel !== el.action.params.label) el.action.params.label = _fixedLabel;
+                }
+                const etaLabel = el.action?.params?.label || '';
+                contentHtml = `<div class="cp-eta-element">
+                    ${etaLabel ? `<div class="cp-eta-label">${etaLabel}</div>` : ''}
+                    <div class="cp-eta-input"></div>
                 </div>`;
                 break;
             case 'dragquestion':
@@ -2146,6 +2168,30 @@ function cpAddElement(type) {
             element.backgroundOpacity = 0;
             element.width = 60;
             element.height = 50;
+            break;
+        case 'exportabletextarea':
+            element.action = {
+                library: 'H5P.ExportableTextArea 1.3',
+                params: {
+                    index: 0,
+                    exportNotSupported: "La fonction export n'est pas supportée sur cet équipement.",
+                    exportComments: false,
+                    label: '<p><strong>Consigne : écrivez votre réponse ci-dessous </strong>👇</p>'
+                },
+                subContentId: generateUUID(),
+                metadata: {
+                    contentType: 'Exportable Text Area',
+                    license: 'U',
+                    title: 'Sans titre Exportable Text Area',
+                    authors: [],
+                    changes: []
+                }
+            };
+            element.backgroundOpacity = 0;
+            element.x = 20;
+            element.y = 29.62962962962963;
+            element.width = 60;
+            element.height = 29.62962962962963;
             break;
         case 'dragdrop':
             element.action = {
@@ -3601,6 +3647,52 @@ function cpRenderElementProps() {
                 </div>`;
             break;
             
+        case 'exportabletextarea':
+            const etaLabel = element.action?.params?.label || '';
+            propsHtml += `
+                <div class="cp-prop-group">
+                    <label class="cp-prop-label">Consigne</label>
+                    <div class="rich-text-toolbar" style="margin-bottom: 0.25rem;">
+                        <button class="rich-text-btn" onclick="cpEtaLabelExecCmd('bold')" title="Gras (Ctrl+B)"><b>G</b></button>
+                        <button class="rich-text-btn" onclick="cpEtaLabelExecCmd('italic')" title="Italique (Ctrl+I)"><i>I</i></button>
+                        <button class="rich-text-btn" onclick="cpEtaLabelExecCmd('underline')" title="Souligné (Ctrl+U)"><u>S</u></button>
+                        <span class="rich-text-separator"></span>
+                        <select class="rich-text-select" onchange="cpEtaLabelFontSize(this.value)" title="Taille">
+                            <option value="">Taille</option>
+                            <option value="1em">100</option>
+                            <option value="1.25em">125</option>
+                            <option value="1.5em">150</option>
+                            <option value="1.75em">175</option>
+                            <option value="2.25em">225</option>
+                            <option value="3em">300</option>
+                        </select>
+                        <span class="rich-text-separator"></span>
+                        <button class="rich-text-btn" onclick="cpEtaLabelExecCmd('justifyLeft')" title="Aligner à gauche">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/>
+                            </svg>
+                        </button>
+                        <button class="rich-text-btn" onclick="cpEtaLabelExecCmd('justifyCenter')" title="Centrer">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="3" y1="6" x2="21" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/>
+                            </svg>
+                        </button>
+                        <button class="rich-text-btn" onclick="cpEtaLabelExecCmd('justifyRight')" title="Aligner à droite">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="3" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="6" y1="18" x2="21" y2="18"/>
+                            </svg>
+                        </button>
+                        ${cpEmojiBarHtml('cpEtaLabelEditor')}
+                    </div>
+                    <div class="rich-text-editor" contenteditable="true" id="cpEtaLabelEditor"
+                         style="min-height: 44px; font-size: 0.85rem;"
+                         oninput="cpUpdateEtaLabelLive()" onblur="cpUpdateEtaLabelFromEditor()">${etaLabel}</div>
+                    <p style="font-size: 0.7rem; color: var(--gray-500); margin: 0.35rem 0 0;">
+                        L'élève écrit sa réponse dans le champ situé sous la consigne.
+                    </p>
+                </div>`;
+            break;
+
         case 'blanks':
             const blanksTitle = element.action?.params?.text || 'Texte à trous';
             const blanksTitleClean = blanksTitle.replace(/<[^>]*>/g, '');
@@ -3718,41 +3810,41 @@ function cpRenderElementProps() {
             const videoUrl = element.action?.params?.interactiveVideo?.video?.files?.[0]?.path || '';
             const interactions = element.action?.params?.interactiveVideo?.assets?.interactions || [];
             
-            // Liste des interactions
-            let interactionsHtml = '';
-            interactions.forEach((inter, iIdx) => {
-                const interType = inter.action?.library?.split(' ')[0]?.replace('H5P.', '') || 'Text';
-                const interTime = inter.duration?.from || 0;
-                const typeLabelsMap = { 'Text': 'Texte', 'MultiChoice': 'QCM', 'TrueFalse': 'Vrai/Faux', 'Blanks': 'Texte \u00e0 trous' };
-                const interLabel = typeLabelsMap[interType] || inter.label?.replace(/<[^>]*>/g, '') || 'Interaction ' + (iIdx + 1);
-                
-                interactionsHtml += `
-                    <div class="cp-interaction-item" style="background: var(--gray-50); padding: 0.4rem; border-radius: 4px; margin-bottom: 0.4rem; border-left: 3px solid var(--primary);">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <div style="flex: 1; min-width: 0;">
-                                <div style="font-weight: 600; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(interLabel)}</div>
-                                <div style="font-size: 0.65rem; color: var(--gray-500);">⏱ ${cpFormatTime(interTime)} • ${interType}</div>
-                            </div>
-                            <div style="display: flex; gap: 0.15rem; margin-left: 0.25rem;">
-                                <button class="tree-action-btn" onclick="cpGoToInteraction(${iIdx})" title="Aller à" style="font-size: 0.65rem;">📍</button>
-                                <button class="tree-action-btn" onclick="cpEditInteraction(${iIdx})" title="Éditer" style="font-size: 0.65rem;">✏️</button>
-                                <button class="tree-action-btn" onclick="cpDeleteInteraction(${iIdx})" title="Supprimer" style="font-size: 0.65rem;">🗑️</button>
-                            </div>
-                        </div>
-                    </div>`;
-            });
+            const interactionsHtml = cpInteractionsListHtml(interactions);
             
-            propsHtml += `
+            // Vidéo intégrée au parcours (fichier du .mbz) ou lien externe : deux affichages.
+            // On ne montre JAMAIS l'URL interne serve_upload, illisible et sans intérêt.
+            const srcInfo = cpVideoSourceInfo(videoUrl, element);
+            const blocSource = srcInfo.integree
+                ? `
+                <div class="cp-prop-group">
+                    <label class="cp-prop-label">Vidéo intégrée au parcours</label>
+                    <div style="display:flex; align-items:center; gap:6px; background:var(--gray-50); border:1px solid var(--gray-200); border-radius:4px; padding:6px 8px;">
+                        <span style="flex-shrink:0;">🎬</span>
+                        <span title="${escapeHtml(srcInfo.nomFichier)}"
+                              style="flex:1; min-width:0; font-size:0.72rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(srcInfo.nomFichier)}</span>
+                        <button class="btn btn-secondary" title="Télécharger la vidéo"
+                                onclick="cpDownloadVideo(${escapeHtml(JSON.stringify(srcInfo.urlTelechargement))}, ${escapeHtml(JSON.stringify(srcInfo.nomFichier))})"
+                                style="flex-shrink:0; padding:0.2rem 0.45rem; font-size:0.7rem;">⬇</button>
+                    </div>
+                    <p style="font-size: 0.65rem; color: var(--gray-400); margin: 4px 0 0;">Le fichier est dans le parcours. Téléchargez-le pour le mettre en ligne (podeduc…).</p>
+                    <input type="text" class="cp-prop-input" value="" placeholder="Remplacer par une URL…"
+                           onchange="if(this.value.trim()) cpUpdateVideoUrl(this.value.trim())"
+                           style="font-size: 0.8rem; margin-top: 6px;">
+                </div>`
+                : `
                 <div class="cp-prop-group">
                     <label class="cp-prop-label">URL de la vidéo</label>
                     <input type="text" class="cp-prop-input" value="${escapeHtml(videoUrl)}" placeholder="https://..."
                            onchange="cpUpdateVideoUrl(this.value)" style="font-size: 0.8rem;">
-                    <p style="font-size: 0.65rem; color: var(--gray-400); margin: 4px 0 0;">YouTube, Vimeo ou URL directe</p>
-                </div>
+                    <p style="font-size: 0.65rem; color: var(--gray-400); margin: 4px 0 0;">podeduc, YouTube, Vimeo ou URL directe</p>
+                </div>`;
+
+            propsHtml += blocSource + `
                 <div class="cp-prop-group">
                     <label class="cp-prop-label">Interactions (${interactions.length})</label>
-                    <div style="max-height: 180px; overflow-y: auto; margin-bottom: 0.5rem;">
-                        ${interactionsHtml || '<p style="font-size: 0.7rem; color: var(--gray-400); text-align: center; padding: 0.5rem;">Aucune interaction</p>'}
+                    <div id="cpInteractionsList" style="max-height: 180px; overflow-y: auto; margin-bottom: 0.5rem;">
+                        ${interactionsHtml}
                     </div>
                     <div style="display: flex; gap: 0.25rem;">
                         <select id="cpNewInteractionType" class="cp-prop-input" style="flex: 1; font-size: 0.7rem; padding: 0.3rem;">
@@ -6491,6 +6583,55 @@ function cpUpdateBlanksTitleFromEditor() {
     onCourseModified();
 }
 
+// === Zone de saisie libre (H5P.ExportableTextArea) : édition de la consigne ===
+
+function cpEtaLabelExecCmd(command) {
+    const editor = document.getElementById('cpEtaLabelEditor');
+    if (!editor) return;
+    editor.focus();
+    document.execCommand(command, false, null);
+    cpUpdateEtaLabelLive();
+}
+
+function cpEtaLabelFontSize(size) {
+    if (!size) return;
+    const editor = document.getElementById('cpEtaLabelEditor');
+    if (!editor) return;
+    cpApplyFontSize(editor, size);
+    editor.focus();
+    cpUpdateEtaLabelLive();
+}
+
+function cpUpdateEtaLabelLive() {
+    const editor = document.getElementById('cpEtaLabelEditor');
+    if (!editor) return;
+    const activity = getSelectedActivity();
+    if (!activity || cpSelectedElement === null) return;
+    const slide = activity.content.presentation.slides[cpCurrentSlide];
+    const element = slide.elements[cpSelectedElement];
+    element.action.params.label = _cpFixLinksTarget(editor.innerHTML);
+
+    // Refléter la consigne sur le canvas sans reconstruire toute la slide
+    const canvasLabel = document.querySelector('.cp-element[data-idx="' + cpSelectedElement + '"] .cp-eta-label');
+    if (canvasLabel) canvasLabel.innerHTML = editor.innerHTML;
+}
+
+function cpUpdateEtaLabelFromEditor() {
+    const editor = document.getElementById('cpEtaLabelEditor');
+    if (!editor) return;
+    const activity = getSelectedActivity();
+    if (!activity || cpSelectedElement === null) return;
+    const slide = activity.content.presentation.slides[cpCurrentSlide];
+    const element = slide.elements[cpSelectedElement];
+
+    let html = editor.innerHTML.trim();
+    if (html === '<br>') html = '';
+    element.action.params.label = html;
+
+    cpRenderSlideElements();
+    onCourseModified();
+}
+
 function cpUpdateBlanksQuestions(text) {
     const activity = getSelectedActivity();
     const slide = activity.content.presentation.slides[cpCurrentSlide];
@@ -6753,6 +6894,46 @@ function cpUpdateTfAnswer(qIdx, aIdx, value) {
     
     cpRenderSlideElements();
     onCourseModified();
+}
+
+/**
+ * Décrit la source d'une vidéo : intégrée au parcours, ou lien externe.
+ * Une vidéo est « intégrée » quand son chemin pointe vers notre servveur de fichiers
+ * (api/editor_api.php?action=serve_upload&file=…) : c'est un fichier issu du .mbz.
+ * Tout le reste (podeduc, YouTube, Vimeo, URL directe) est un lien externe qu'on
+ * affiche tel quel — voir aussi le garde-fou côté PHP dans replaceFilePathsInContent().
+ */
+function cpVideoSourceInfo(path, element) {
+    var vide = { integree: false, nomFichier: '', urlTelechargement: '' };
+    if (!path) return vide;
+    if (path.indexOf('action=serve_upload') === -1) return vide;
+
+    var m = /[?&]file=([^&]+)/.exec(path);
+    if (!m) return vide;
+    var nomFichier = decodeURIComponent(m[1]);
+
+    // Nom de téléchargement lisible : titre de l'élément si disponible, sinon le fichier.
+    var titre = (element && element.action && element.action.metadata && element.action.metadata.title) || '';
+    var ext = (nomFichier.split('.').pop() || 'mp4').toLowerCase();
+    var nomDl = titre
+        ? titre.replace(/[\\/:*?"<>|]/g, '-').trim().slice(0, 60) + '.' + ext
+        : nomFichier;
+
+    return {
+        integree: true,
+        nomFichier: nomFichier,
+        urlTelechargement: path + '&download=1&download_name=' + encodeURIComponent(nomDl)
+    };
+}
+
+/** Télécharge la vidéo intégrée (pour la remettre ensuite sur podeduc, par exemple). */
+function cpDownloadVideo(url, nom) {
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = nom || '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
 }
 
 function cpUpdateVideoUrl(url) {
@@ -7185,6 +7366,39 @@ function cpFormatTime(seconds) {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return mins.toString().padStart(2, '0') + ':' + secs.toString().padStart(2, '0');
+}
+
+/** Découpe un temps (en secondes) en minutes / secondes / millisecondes. */
+function cpTimeParts(seconds) {
+    let t = Math.max(0, Number(seconds) || 0);
+    let m = Math.floor(t / 60);
+    let s = Math.floor(t % 60);
+    let ms = Math.round((t - Math.floor(t)) * 1000);
+    // l'arrondi peut produire 1000 ms : on reporte
+    if (ms >= 1000) { ms -= 1000; s += 1; }
+    if (s >= 60) { s -= 60; m += 1; }
+    return { m: m, s: s, ms: ms };
+}
+
+/** Affichage précis « mm:ss.mmm » (le format court cpFormatTime reste utilisé ailleurs). */
+function cpFormatTimeMs(seconds) {
+    const p = cpTimeParts(seconds);
+    return String(p.m).padStart(2, '0') + ':' + String(p.s).padStart(2, '0')
+         + '.' + String(p.ms).padStart(3, '0');
+}
+
+/**
+ * Re-rend la slide en préservant la lecture vidéo en cours (position + état).
+ * À appeler après TOUTE modification d'une interaction : sans ça, le canvas gardait
+ * l'ancien contenu (texte, réponses, mode d'affichage…) jusqu'au prochain rendu.
+ * Ne pas l'utiliser dans un gestionnaire `oninput` : le re-rendu détruirait le champ
+ * en cours de frappe — voir cpSaveInteractionRichText() qui met à jour en place.
+ */
+function cpRefreshVideoOnCanvas() {
+    if (cpSelectedElement === null || cpSelectedElement === undefined) return;
+    const saved = cpSaveVideoPosition(cpSelectedElement);
+    cpRenderSlideElements();
+    cpRestoreVideoPosition(cpSelectedElement, saved);
 }
 
 // Toggle play/pause de la vidéo sur le canvas
@@ -7933,16 +8147,8 @@ function cpEditInteraction(idx) {
             </div>
             
             <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
-                <div style="flex: 1;">
-                    <label class="cp-prop-label" style="font-size: 0.75rem;">Début (sec)</label>
-                    <input type="number" class="cp-prop-input" value="${inter.duration?.from || 0}" min="0" step="0.5"
-                           onchange="cpUpdateInteractionTiming(${idx}, 'from', parseFloat(this.value))" style="font-size: 0.8rem;">
-                </div>
-                <div style="flex: 1;">
-                    <label class="cp-prop-label" style="font-size: 0.75rem;">Fin (sec)</label>
-                    <input type="number" class="cp-prop-input" value="${inter.duration?.to || 10}" min="0" step="0.5"
-                           onchange="cpUpdateInteractionTiming(${idx}, 'to', parseFloat(this.value))" style="font-size: 0.8rem;">
-                </div>
+                ${cpTimingFieldsHtml(idx, 'from', 'Début', inter.duration?.from || 0)}
+                ${cpTimingFieldsHtml(idx, 'to', 'Fin', inter.duration?.to ?? 10)}
             </div>
 
             <div style="display: flex; gap: 0.5rem; margin-bottom: 0.25rem;">
@@ -8130,14 +8336,108 @@ function cpUpdateInteractionProp(idx, prop, value) {
     
     if (inter) {
         inter[prop] = value;
-        // Rafraîchir si c'est une propriété visuelle (position, label)
-        if (['x', 'y', 'label'].includes(prop)) {
-            const _saved = cpSaveVideoPosition(cpSelectedElement);
-            cpRenderSlideElements();
-            cpRestoreVideoPosition(cpSelectedElement, _saved);
-        }
+        // Toute propriété est visible sur le canvas (mode d'affichage, pause, label…) :
+        // on rafraîchit systématiquement. Avant, seuls x/y/label le faisaient et le reste
+        // ne se voyait qu'au prochain rendu.
+        cpRefreshVideoOnCanvas();
+        if (prop === 'label') cpRefreshInteractionsList(); // le libellé s'affiche dans la liste
         onCourseModified();
     }
+}
+
+/**
+ * Liste des interactions du panneau, TRIÉE par ordre d'apparition dans la vidéo.
+ * On trie une copie [index réel, interaction] : l'ordre du tableau H5P n'est pas modifié,
+ * donc les index passés aux boutons (aller à / éditer / supprimer) restent valides.
+ */
+function cpInteractionsListHtml(interactions) {
+    if (!interactions || !interactions.length) {
+        return '<p style="font-size: 0.7rem; color: var(--gray-400); text-align: center; padding: 0.5rem;">Aucune interaction</p>';
+    }
+    const typeLabelsMap = { 'Text': 'Texte', 'MultiChoice': 'QCM', 'TrueFalse': 'Vrai/Faux', 'Blanks': 'Texte à trous' };
+
+    return interactions
+        .map((inter, iIdx) => ({ inter: inter, iIdx: iIdx, t: inter.duration?.from || 0 }))
+        .sort((a, b) => a.t - b.t || a.iIdx - b.iIdx)   // à temps égal : ordre d'origine
+        .map(({ inter, iIdx, t }) => {
+            const interType = inter.action?.library?.split(' ')[0]?.replace('H5P.', '') || 'Text';
+            const interLabel = typeLabelsMap[interType] || inter.label?.replace(/<[^>]*>/g, '') || 'Interaction ' + (iIdx + 1);
+            return `
+                    <div class="cp-interaction-item" style="background: var(--gray-50); padding: 0.4rem; border-radius: 4px; margin-bottom: 0.4rem; border-left: 3px solid var(--primary);">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div style="flex: 1; min-width: 0;">
+                                <div style="font-weight: 600; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(interLabel)}</div>
+                                <div style="font-size: 0.65rem; color: var(--gray-500);">⏱ ${cpFormatTimeMs(t)} • ${interType}</div>
+                            </div>
+                            <div style="display: flex; gap: 0.15rem; margin-left: 0.25rem;">
+                                <button class="tree-action-btn" onclick="cpGoToInteraction(${iIdx})" title="Aller à" style="font-size: 0.65rem;">📍</button>
+                                <button class="tree-action-btn" onclick="cpEditInteraction(${iIdx})" title="Éditer" style="font-size: 0.65rem;">✏️</button>
+                                <button class="tree-action-btn" onclick="cpDeleteInteraction(${iIdx})" title="Supprimer" style="font-size: 0.65rem;">🗑️</button>
+                            </div>
+                        </div>
+                    </div>`;
+        }).join('');
+}
+
+/**
+ * Re-rend la SEULE liste des interactions (pour la réordonner après un changement de temps).
+ * On ne re-rend pas tout le panneau : cela fermerait l'éditeur d'interaction ouvert et
+ * ferait perdre le focus du champ que l'utilisateur vient de quitter.
+ */
+function cpRefreshInteractionsList() {
+    const conteneur = document.getElementById('cpInteractionsList');
+    if (!conteneur || cpSelectedElement === null) return;
+    const activity = getSelectedActivity();
+    const element = activity?.content?.presentation?.slides?.[cpCurrentSlide]?.elements?.[cpSelectedElement];
+    const interactions = element?.action?.params?.interactiveVideo?.assets?.interactions || [];
+    conteneur.innerHTML = cpInteractionsListHtml(interactions);
+}
+
+/** Trois champs min : sec : ms pour une borne de temps ('from' ou 'to'). */
+function cpTimingFieldsHtml(idx, prop, libelle, seconds) {
+    const p = cpTimeParts(seconds);
+    const champ = (part, val, max, step, titre) =>
+        `<input type="number" id="cpInterT_${prop}_${part}_${idx}" class="cp-prop-input"
+                value="${val}" min="0"${max !== null ? ` max="${max}"` : ''} step="${step}" title="${titre}"
+                onchange="cpUpdateTimingFromParts(${idx}, '${prop}')"
+                style="font-size:0.8rem; padding:0.25rem 0.15rem; text-align:center; min-width:0; width:100%;">`;
+    return `
+                <div style="flex: 1; min-width: 0;">
+                    <label class="cp-prop-label" style="font-size: 0.75rem;">${libelle}
+                        <span style="color: var(--gray-400); font-weight: 400;">min:sec:ms</span></label>
+                    <div style="display: flex; align-items: center; gap: 2px;">
+                        ${champ('m', p.m, null, 1, 'Minutes')}
+                        <span style="color: var(--gray-400);">:</span>
+                        ${champ('s', p.s, 59, 1, 'Secondes')}
+                        <span style="color: var(--gray-400);">:</span>
+                        ${champ('ms', p.ms, 999, 10, 'Millisecondes')}
+                    </div>
+                </div>`;
+}
+
+/** Recompose les secondes depuis les trois champs, avec report des dépassements. */
+function cpUpdateTimingFromParts(idx, prop) {
+    const lire = (part) => {
+        const el = document.getElementById(`cpInterT_${prop}_${part}_${idx}`);
+        const v = el ? parseInt(el.value, 10) : 0;
+        return isNaN(v) || v < 0 ? 0 : v;
+    };
+    let m = lire('m'), s = lire('s'), ms = lire('ms');
+
+    // Saisir « 90 » en secondes doit donner 1 min 30, pas une valeur invalide
+    s += Math.floor(ms / 1000); ms %= 1000;
+    m += Math.floor(s / 60);    s %= 60;
+
+    const total = Math.round((m * 60 + s + ms / 1000) * 1000) / 1000;
+
+    // Recaler l'affichage après report
+    const maj = (part, val) => {
+        const el = document.getElementById(`cpInterT_${prop}_${part}_${idx}`);
+        if (el) el.value = val;
+    };
+    maj('m', m); maj('s', s); maj('ms', ms);
+
+    cpUpdateInteractionTiming(idx, prop, total);
 }
 
 // Mettre à jour le timing d'une interaction
@@ -8146,18 +8446,16 @@ function cpUpdateInteractionTiming(idx, prop, value) {
     const slide = activity.content.presentation.slides[cpCurrentSlide];
     const element = slide.elements[cpSelectedElement];
     const inter = element.action?.params?.interactiveVideo?.assets?.interactions?.[idx];
-    
+
     if (inter) {
         if (!inter.duration) inter.duration = {};
         inter.duration[prop] = value;
-        
-        // Sauvegarder la position vidéo
-        const _saved = cpSaveVideoPosition(cpSelectedElement);
-        
-        cpRenderSlideElements(); // Rafraîchir pour mettre à jour les attributs data-from/data-to
-        
-        cpRestoreVideoPosition(cpSelectedElement, _saved);
-        
+
+        // Rafraîchir pour mettre à jour les attributs data-from/data-to
+        cpRefreshVideoOnCanvas();
+        // La liste est triée par ordre d'apparition : elle doit se réordonner
+        cpRefreshInteractionsList();
+
         onCourseModified();
     }
 }
@@ -8173,10 +8471,7 @@ function cpUpdateInteractionContent(idx, prop, value) {
         if (!inter.action.params) inter.action.params = {};
         inter.action.params[prop] = value;
         
-        // Rafraîchir le canvas pour afficher le nouveau contenu
-        const _saved = cpSaveVideoPosition(cpSelectedElement);
-        cpRenderSlideElements();
-        cpRestoreVideoPosition(cpSelectedElement, _saved);
+        cpRefreshVideoOnCanvas();
         
         onCourseModified();
     }
@@ -8204,6 +8499,14 @@ function cpSaveInteractionRichText(idx) {
     if (inter && inter.action) {
         if (!inter.action.params) inter.action.params = {};
         inter.action.params.text = html;
+
+        // Mise à jour EN PLACE de la carte sur le canvas. Appelé sur `oninput` (à chaque
+        // frappe) : un re-rendu complet détruirait le champ en cours d'édition et le curseur.
+        // Sans cela, le texte tapé n'apparaissait sur la vidéo qu'au prochain rendu.
+        const carte = document.getElementById('cpInteraction_' + cpSelectedElement + '_' + idx);
+        const zone = carte && carte.querySelector('.cp-interaction-text');
+        if (zone) zone.innerHTML = html;
+
         onCourseModified();
     }
 }
@@ -8218,10 +8521,7 @@ function cpUpdateInteractionAnswer(idx, ansIdx, prop, value) {
     if (inter && inter.action?.params?.answers?.[ansIdx]) {
         inter.action.params.answers[ansIdx][prop] = value;
         
-        // Rafraîchir le canvas pour afficher le nouveau contenu
-        const _saved = cpSaveVideoPosition(cpSelectedElement);
-        cpRenderSlideElements();
-        cpRestoreVideoPosition(cpSelectedElement, _saved);
+        cpRefreshVideoOnCanvas();
         
         onCourseModified();
     }
@@ -9374,8 +9674,24 @@ function cpDqProcessBlocksResult(result, imageData, srcCanvas) {
     bgCtx.fillStyle = '#ffffff';
     bgCtx.fillRect(0, 0, extW, extH);
     
+    // Scratch n'a pas de bloc « conteneur » : les instructions s'empilent sans enveloppe.
+    // Sans ce cas, containerBlocks était vide, rien n'était dessiné et le fond restait
+    // entièrement BLANC — l'espace de travail disparaissait. On garde l'image d'origine
+    // et on efface seulement l'emplacement des pièces (blanc, comme pour MakeCode).
+    if (manifest.source === 'scratch') {
+        bgCtx.drawImage(srcCanvas, 0, 0);
+        var scratchImageData = bgCtx.getImageData(0, 0, w, h);
+        var sData = scratchImageData.data;
+        var trouScratch = extractionMasqueFondScratch(actionBlocks, blockMasks, rgba, w, h);
+        for (var sIdx = 0; sIdx < w * h; sIdx++) {
+            if (!trouScratch[sIdx]) continue;
+            var so = sIdx * 4;
+            sData[so] = 255; sData[so + 1] = 255; sData[so + 2] = 255; sData[so + 3] = 255;
+        }
+        bgCtx.putImageData(scratchImageData, 0, 0);
+    }
     // Dessiner uniquement les pixels des conteneurs SANS les blocs d'action imbriqués
-    if (containerBlocks.length > 0) {
+    else if (containerBlocks.length > 0) {
         // Construire un masque combiné de tous les blocs d'action à exclure
         var actionMask = new Uint8Array(w * h);
         for (var ai = 0; ai < actionBlocks.length; ai++) {

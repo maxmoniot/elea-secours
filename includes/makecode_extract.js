@@ -18,6 +18,10 @@ const MKExtract = (function () {
   const CONTAINER_HEIGHT_THRESHOLD = 80;
   const FIELD_HEIGHT_THRESHOLD = 40;
   const DIAMOND_MIN_WIDTH = 60;
+  // Au-delà de cette hauteur, un enfant n'est plus un champ MakeCode (menu, ovale, nombre :
+  // 20 à 32 px sur les captures) mais un bloc-instruction (38 px et plus, même sans champ).
+  // Un tel enfant n'est absorbé par son parent que s'il en a la couleur — cf. phase 4j.
+  const STATEMENT_MIN_HEIGHT = 34;
   const MIN_REGION_AREA = 15;
   const SMALL_FRAGMENT_AREA = 1500;
   const BORDER_ASSIGN_DIST = 2.5;
@@ -27,6 +31,11 @@ const MKExtract = (function () {
   const NOTCH_HUE_THRESHOLD = 30;
   const TIGHT_HUE_THRESHOLD = 10;
   const EXTRACTION_PAD = 3;
+  // Distance RGB en dessous de laquelle deux régions ont la MÊME couleur de
+  // remplissage : les blocs Blockly/MakeCode sont en aplats, deux morceaux d'un
+  // même bloc ont donc une moyenne quasi identique, alors que deux catégories
+  // différentes sont séparées d'au moins ~40.
+  const SAME_FILL_DIST = 20;
 
   // ═══════════════════════════════════════════════════════════════════
   // DÉTECTION SOURCE : Scratch vs MakeCode
@@ -414,6 +423,29 @@ const MKExtract = (function () {
   /** Copie d'un Uint8Array. */
   function copyMask(m) { return new Uint8Array(m); }
 
+  /** Deux régions ont-elles la même couleur de remplissage (= morceaux d'un même bloc) ? */
+  function sameFill(r1, r2) {
+    const dr = r1.meanColor[0] - r2.meanColor[0];
+    const dg = r1.meanColor[1] - r2.meanColor[1];
+    const db = r1.meanColor[2] - r2.meanColor[2];
+    return Math.sqrt(dr * dr + dg * dg + db * db) <= SAME_FILL_DIST;
+  }
+
+  /**
+   * `r` est-il un bloc IMBRIQUÉ dans le conteneur `c` (et non un morceau de `c`) ?
+   * Vrai quand r tient entièrement dans c, est nettement plus court que lui et
+   * n'a pas la même couleur de remplissage → un bloc posé dans l'encoche du « si ».
+   */
+  function nestedInContainer(r, c) {
+    if (sameFill(r, c)) return false;
+    const [rx, ry, rw, rh] = r.bbox, [cx, cy, cw, ch] = c.bbox;
+    if (ch <= CONTAINER_HEIGHT_THRESHOLD || rh > ch * 0.6) return false;
+    const ovX = Math.max(0, Math.min(cx + cw, rx + rw) - Math.max(cx, rx));
+    const ovY = Math.max(0, Math.min(cy + ch, ry + rh) - Math.max(cy, ry));
+    const a = rw * rh;
+    return a > 0 && (ovX * ovY) / a >= 0.9;
+  }
+
   /** OR en place : dst |= src. */
   function orInPlace(dst, src) { for (let i = 0; i < dst.length; i++) dst[i] = dst[i] | src[i]; }
 
@@ -495,6 +527,9 @@ const MKExtract = (function () {
         hueDiff = Math.min(hueDiff, 180 - hueDiff);
         const valDiff = Math.abs(r1.meanVal - r2.meanVal);
         if (hueDiff > HUE_MERGE_THRESHOLD || valDiff > VAL_MERGE_THRESHOLD) continue;
+        // Un bloc posé DANS un conteneur n'est jamais un morceau de ce conteneur :
+        // teintes voisines (deux verts/bleus proches) + adjacence ne suffisent pas.
+        if (nestedInContainer(r1, r2) || nestedInContainer(r2, r1)) continue;
         const yOv = Math.max(0, Math.min(y1 + h1, y2 + h2) - Math.max(y1, y2));
         const mh = Math.min(h1, h2);
         if (mh === 0 || yOv / mh < 0.4) continue;
@@ -504,50 +539,65 @@ const MKExtract = (function () {
       }
     }
 
+    // Absorption d'un fragment : il rejoint son parent le plus SERRÉ.
+    // Un fragment posé dans un bloc enfant (ex. le menu « P2 » d'un « mettre servo »)
+    // est aussi géométriquement contenu dans le conteneur « si » qui entoure ce bloc :
+    // s'il fusionnait avec les deux, il servirait de pont et collerait définitivement
+    // l'enfant au conteneur — c'est ce qui empêchait d'extraire les blocs posés
+    // dans un « si » de teinte voisine.
+    // Les bandes de conteneur ainsi laissées de côté (morceau de la barre de
+    // condition coupé par un champ posé dessus) sont récupérées plus loin, en
+    // phase 4j, qui absorbe dans le conteneur tout enfant bas (≤ FIELD_HEIGHT)
+    // de même couleur.
+    function absorbFragment(i, cands) {
+      if (!cands.length) return;
+      let tight = cands[0];
+      for (const c of cands) if (blockRegions[c].area < blockRegions[tight].area) tight = c;
+      union(i, tight);
+    }
+
     // 3b. Absorption des petites régions
     for (let i = 0; i < n; i++) {
       const r = blockRegions[i];
       if (r.area >= 200) continue;
       const [x, y, rw, rh] = r.bbox;
-      let best = -1, bestArea = 0;
+      const cands = [];
       for (let j = 0; j < n; j++) {
         if (i === j) continue;
         const rj = blockRegions[j];
+        if (rj.area <= r.area) continue;
         const [xj, yj, wj, hj] = rj.bbox;
         if (xj > x || yj > y || xj + wj < x + rw || yj + hj < y + rh) continue;
         let hd = Math.abs(r.meanHue - rj.meanHue);
         hd = Math.min(hd, 180 - hd);
-        if (hd < 20 && rj.area > bestArea) { bestArea = rj.area; best = j; }
+        if (hd < 20) cands.push(j);
       }
-      if (best >= 0) union(i, best);
+      absorbFragment(i, cands);
     }
 
     // 3c. Containment des fragments
     for (let i = 0; i < n; i++) {
       const ri = blockRegions[i];
+      if (ri.area > SMALL_FRAGMENT_AREA) continue;
       const [xi, yi, wi, hi] = ri.bbox;
+      const smBboxArea = wi * hi;
+      if (smBboxArea <= 0) continue;
+      const cands = [];
       for (let j = 0; j < n; j++) {
-        if (i === j || find(i) === find(j)) continue;
+        if (i === j) continue;
         const rj = blockRegions[j];
+        if (rj.area <= ri.area) continue;
         let hd = Math.abs(ri.meanHue - rj.meanHue);
         hd = Math.min(hd, 180 - hd);
         const vd = Math.abs(ri.meanVal - rj.meanVal);
         if (hd > HUE_MERGE_THRESHOLD || vd > VAL_MERGE_THRESHOLD) continue;
         const [xj, yj, wj, hj] = rj.bbox;
-        let bigX, bigY, bigW, bigH, smX, smY, smW, smH, smArea;
-        if (ri.area >= rj.area) {
-          [bigX, bigY, bigW, bigH] = [xi, yi, wi, hi];
-          [smX, smY, smW, smH] = [xj, yj, wj, hj]; smArea = rj.area;
-        } else {
-          [bigX, bigY, bigW, bigH] = [xj, yj, wj, hj];
-          [smX, smY, smW, smH] = [xi, yi, wi, hi]; smArea = ri.area;
-        }
-        if (smArea > SMALL_FRAGMENT_AREA) continue;
-        const ovX = Math.max(0, Math.min(bigX + bigW, smX + smW) - Math.max(bigX, smX));
-        const ovY = Math.max(0, Math.min(bigY + bigH, smY + smH) - Math.max(bigY, smY));
-        const smBboxArea = smW * smH;
-        if (smBboxArea > 0 && (ovX * ovY) / smBboxArea > 0.6) union(i, j);
+        const ovX = Math.max(0, Math.min(xj + wj, xi + wi) - Math.max(xj, xi));
+        const ovY = Math.max(0, Math.min(yj + hj, yi + hi) - Math.max(yj, yi));
+        if ((ovX * ovY) / smBboxArea <= 0.6) continue;
+        cands.push(j);
       }
+      absorbFragment(i, cands);
     }
 
     // Construire les blocs fusionnés
@@ -933,12 +983,14 @@ const MKExtract = (function () {
         const [cx1, cy1, cx2, cy2] = bboxes[ci];
         const childH = cy2 - cy1, childW = cx2 - cx1;
         if (childH > FIELD_HEIGHT_THRESHOLD) continue;
-        if (childW > DIAMOND_MIN_WIDTH) {
-          // Large enfant : vérifier si même couleur que parent
+        if (childW > DIAMOND_MIN_WIDTH || childH >= STATEMENT_MIN_HEIGHT) {
+          // Enfant trop grand pour être un champ : ne l'absorber que s'il a la couleur du
+          // parent (= morceau du corps du conteneur). Couleur différente → c'est un diamond
+          // ou un bloc-instruction posé dans l'encoche : il doit rester une pièce à part.
           const pc = blocks[pi].meanColor, cc = blocks[ci].meanColor;
           const dr = pc[0] - cc[0], dg = pc[1] - cc[1], db = pc[2] - cc[2];
           const colorDist = Math.sqrt(dr * dr + dg * dg + db * db);
-          if (colorDist > 60) continue;  // couleur différente → diamond, ne pas absorber
+          if (colorDist > 60) continue;
         }
         if (cx1 < px1 || cy1 < py1 || cx2 > px2 || cy2 > py2) continue;
         if (blocks[ci].area >= blocks[pi].area) continue;
@@ -967,8 +1019,9 @@ const MKExtract = (function () {
         const [cx1, cy1, cx2, cy2] = bboxes[ci];
         if (jy1 < cy1 - 4 || jy1 >= cy2) continue;  // tolérance 4px pour les notches
         if (jx1 - cx1 < NOTCH_INDENT) continue;
-        // Large enfant de couleur différente = diamond, ne pas absorber
-        if (childW > DIAMOND_MIN_WIDTH) {
+        // Enfant trop grand pour être un champ et de couleur différente = diamond ou
+        // bloc-instruction posé dans l'encoche : ne pas absorber (même règle qu'en A)
+        if (childW > DIAMOND_MIN_WIDTH || childH >= STATEMENT_MIN_HEIGHT) {
           const pc = blocks[ci].meanColor, cc = blocks[j].meanColor;
           const dr = pc[0] - cc[0], dg = pc[1] - cc[1], db = pc[2] - cc[2];
           if (Math.sqrt(dr * dr + dg * dg + db * db) > 60) continue;
@@ -1856,7 +1909,7 @@ const MKExtract = (function () {
       mask_nonzero: countNonZero(finalMasks[b.id])
     }));
 
-    return { manifest, blockMasks: finalMasks, bgColor, phases, _version: '2026-02-26a-MakeCode' };
+    return { manifest, blockMasks: finalMasks, bgColor, phases, _version: '2026-08-07-MakeCode-blocs-imbriques' };
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -1973,6 +2026,17 @@ const MKExtract = (function () {
 
     const SCRATCH_HUE_MERGE = 15;
     const SCRATCH_VAL_MERGE = 40;
+    // La TEINTE ne sépare PAS les catégories Scratch : « si » (255,171,25),
+    // « envoyer à tous » (240,180,0) et « ajouter à » (244,130,18) sont à 3,5-4 de
+    // teinte les uns des autres, bien en dessous de SCRATCH_HUE_MERGE. Résultat, un
+    // bloc posé dans un « si » était fusionné avec lui et jamais extrait.
+    // Leur distance RGB, elle, vaut 30 à 43, alors qu'à l'intérieur d'un même bloc
+    // le corps est d'une couleur parfaitement plate (distance ~0).
+    const SCRATCH_COLOR_MERGE = 20;
+    function scratchMemeCouleur(a, b) {
+      const dr = a[0] - b[0], dg = a[1] - b[1], db = a[2] - b[2];
+      return dr * dr + dg * dg + db * db <= SCRATCH_COLOR_MERGE * SCRATCH_COLOR_MERGE;
+    }
 
     for (let i = 0; i < nB; i++) {
       const dil = dilate(blockMasksP3[i], w, h, 5, 5);
@@ -1982,6 +2046,7 @@ const MKExtract = (function () {
         if (hd > SCRATCH_HUE_MERGE) continue;
         const vd = Math.abs(blockRegs[i].meanVal - blockRegs[j].meanVal);
         if (vd > SCRATCH_VAL_MERGE) continue;
+        if (!scratchMemeCouleur(blockRegs[i].meanColor, blockRegs[j].meanColor)) continue;
         // Adjacence : le dilaté de i touche-t-il j ?
         let touches = false;
         const stj = cc.stats[blockRegs[j].label];
@@ -2008,6 +2073,7 @@ const MKExtract = (function () {
         if (hd > SCRATCH_HUE_MERGE) continue;
         const vd = Math.abs(blockRegs[i].meanVal - blockRegs[j].meanVal);
         if (vd > SCRATCH_VAL_MERGE) continue;
+        if (!scratchMemeCouleur(blockRegs[i].meanColor, blockRegs[j].meanColor)) continue;
 
         const [ax, ay, aw, ah] = blockRegs[i].bbox;
         const [bx, by, bw, bh] = blockRegs[j].bbox;
@@ -2120,6 +2186,85 @@ const MKExtract = (function () {
       }
     }
     phases.p3b_after_absorption = mergedBlocks.length;
+
+    // Ton DOMINANT d'un masque (et non moyen : la moyenne est faussée par les menus
+    // déroulants, plus sombres, alors que le corps d'un bloc est parfaitement plat).
+    function scratchTonDominant(mask) {
+      const compte = new Map();
+      for (let i = 0; i < n; i++) {
+        if (!mask[i]) continue;
+        const o = i * 4;
+        const cle = ((rgba[o] >> 3) << 10) | ((rgba[o + 1] >> 3) << 5) | (rgba[o + 2] >> 3);
+        compte.set(cle, (compte.get(cle) || 0) + 1);
+      }
+      let meilleure = -1, meilleurN = 0;
+      for (const [cle, nb] of compte) if (nb > meilleurN) { meilleurN = nb; meilleure = cle; }
+      if (meilleure < 0) return null;
+      return [((meilleure >> 10) & 31) << 3, ((meilleure >> 5) & 31) << 3, (meilleure & 31) << 3];
+    }
+
+    // ── P3d : Complétion de la silhouette par la couleur ─────────────
+    // Le corps d'un bloc Scratch qui ENTOURE un opérateur ne fait que 2 px de haut
+    // (mesuré : « mettre … à () », bandes en y=53-54 et y=84-85). Le gradient
+    // morphologique classe une bande de 2 px entièrement en « bordure » : elle ne
+    // forme aucune composante connexe, le bloc s'arrêtait donc au bord de l'opérateur
+    // et la pièce sortait TRONQUÉE (« mettre … à » coupé, bulle « 5 » manquante,
+    // extrémité arrondie perdue), en laissant un fantôme sur le fond.
+    // Ces pixels sont pourtant exactement de la couleur du bloc : on les récupère de
+    // proche en proche, en bornant la propagation à la BANDE HORIZONTALE du bloc pour
+    // ne jamais déborder sur un bloc voisin de même couleur empilé au-dessus/dessous.
+    {
+      // Tolérance SERRÉE : le corps d'un bloc Scratch est d'une couleur parfaitement
+      // plate, seuls les bords anti-aliasés varient (et on n'en a pas besoin ici).
+      // Mesuré : chapeau jaune (255,191,0) et « si » orange (255,171,25) ne sont
+      // distants que de 32 — à 40, la propagation passait du chapeau au bloc du
+      // dessous et le chapeau ressortait avec une bande sur toute la largeur.
+      const SILHOUETTE_TOL = 20;   // distance RGB au ton dominant du bloc
+      const SILHOUETTE_MARGE_Y = 2;
+      for (const b of mergedBlocks) {
+        const ton = scratchTonDominant(b.mask);
+        if (!ton) continue;
+        const cr = ton[0], cg = ton[1], cb = ton[2];
+
+        const [bx, by, bw, bh] = b.bbox;
+        const yMin = Math.max(0, by - SILHOUETTE_MARGE_Y);
+        const yMax = Math.min(h - 1, by + bh - 1 + SILHOUETTE_MARGE_Y);
+
+        const file = [];
+        for (let y = yMin; y <= yMax; y++) {
+          const base = y * w;
+          for (let x = 0; x < w; x++) if (b.mask[base + x]) file.push(base + x);
+        }
+        for (let tete = 0; tete < file.length; tete++) {
+          const i = file[tete];
+          const x = i % w, y = (i - x) / w;
+          for (let dy = -1; dy <= 1; dy++) {
+            const ny = y + dy;
+            if (ny < yMin || ny > yMax) continue;
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = x + dx;
+              if (nx < 0 || nx >= w) continue;
+              const j = ny * w + nx;
+              if (b.mask[j]) continue;
+              const o = j * 4;
+              if (rgba[o + 3] === 0) continue;
+              const dr = rgba[o] - cr, dg = rgba[o + 1] - cg, db = rgba[o + 2] - cb;
+              if (dr * dr + dg * dg + db * db > SILHOUETTE_TOL * SILHOUETTE_TOL) continue;
+              b.mask[j] = 255;
+              file.push(j);
+            }
+          }
+        }
+
+        let mnx = w, mny = h, mxx = -1, mxy = -1;
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+          if (!b.mask[y * w + x]) continue;
+          if (x < mnx) mnx = x; if (y < mny) mny = y;
+          if (x > mxx) mxx = x; if (y > mxy) mxy = y;
+        }
+        if (mxx >= 0) b.bbox = [mnx, mny, mxx - mnx + 1, mxy - mny + 1];
+      }
+    }
 
     // ── P3c : Fusion par recouvrement (même teinte + overlap significatif) ──
     // Quand la gestion ICC du navigateur modifie les pixels, un bloc peut
@@ -3501,6 +3646,67 @@ const MKExtract = (function () {
       }
     }
 
+    // ── P7b : Blocs qui en CONTIENNENT un autre → conteneurs ─────────
+    // Une fois les silhouettes complétées (P3d), un bloc Scratch qui accueille un
+    // opérateur l'englobe entièrement (fillExternal a bouché le trou). On le traite
+    // alors comme le « si » de MakeCode : il devient un CONTENEUR — il reste dans le
+    // fond, avec un trou à la forme de l'enfant — et seul l'enfant est une pièce à
+    // glisser. Sans ça, la pièce parente contenait l'image de son enfant et les deux
+    // zones de dépôt se chevauchaient.
+    {
+      const CONTENU_MARGE = 4;
+      for (let pi = 0; pi < finalBlocks.length; pi++) {
+        if (tooSmall.has(pi)) continue;
+        const [px, py, pw, ph] = finalBlocks[pi].bbox;
+        for (let ci = 0; ci < finalBlocks.length; ci++) {
+          if (ci === pi || tooSmall.has(ci)) continue;
+          const [cx, cy, cw, ch] = finalBlocks[ci].bbox;
+          if (cw * ch >= pw * ph) continue;
+          if (cx < px - CONTENU_MARGE || cy < py - CONTENU_MARGE ||
+              cx + cw > px + pw + CONTENU_MARGE || cy + ch > py + ph + CONTENU_MARGE) continue;
+          // Test sur la COULEUR et non la teinte : les catégories Scratch ne sont
+          // séparées que de 3 à 4 en teinte, mais de 30 à 43 en distance RGB.
+          if (scratchMemeCouleur(finalBlocks[pi].meanColor, finalBlocks[ci].meanColor)) {
+            // MÊME couleur : ce n'est pas un bloc imbriqué mais un MORCEAU du conteneur
+            // (le bras du bas d'un « si … alors »). Il le rejoint au lieu de devenir une
+            // pièce à glisser — sinon l'élève devait replacer l'encadrement lui-même.
+            for (let k = 0; k < n; k++) if (finalMasks[ci][k]) finalMasks[pi][k] = 255;
+            tooSmall.add(ci);
+            continue;
+          }
+          // Le bord arrondi gauche de l'enfant est mitoyen de la colonne du conteneur :
+          // ces pixels, pourtant exactement de la couleur de l'ENFANT, étaient restés au
+          // conteneur et la pièce sortait rognée de 4-5 px. On les lui rend.
+          const tonEnfant = scratchTonDominant(finalMasks[ci]);
+          if (tonEnfant) {
+            const [ex, ey, ew, eh] = finalBlocks[ci].bbox;
+            const yMin = Math.max(0, ey - 2), yMax = Math.min(h - 1, ey + eh - 1 + 2);
+            const xMin = Math.max(0, ex - 8), xMax = Math.min(w - 1, ex + ew - 1 + 8);
+            for (let y = yMin; y <= yMax; y++) {
+              for (let x = xMin; x <= xMax; x++) {
+                const k = y * w + x;
+                if (!finalMasks[pi][k] || finalMasks[ci][k]) continue;
+                const o = k * 4;
+                const dr = rgba[o] - tonEnfant[0], dg = rgba[o + 1] - tonEnfant[1], db = rgba[o + 2] - tonEnfant[2];
+                if (dr * dr + dg * dg + db * db > 20 * 20) continue;
+                finalMasks[ci][k] = 255;
+              }
+            }
+            let mnx = w, mny = h, mxx = -1, mxy = -1;
+            for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+              if (!finalMasks[ci][y * w + x]) continue;
+              if (x < mnx) mnx = x; if (y < mny) mny = y;
+              if (x > mxx) mxx = x; if (y > mxy) mxy = y;
+            }
+            if (mxx >= 0) finalBlocks[ci].bbox = [mnx, mny, mxx - mnx + 1, mxy - mny + 1];
+          }
+          const enfantDil = dilate(finalMasks[ci], w, h, 3, 3);
+          for (let k = 0; k < n; k++) if (enfantDil[k]) finalMasks[pi][k] = 0;
+          finalBlocks[pi].isContainer = true;
+        }
+      }
+    }
+
     for (let i = 0; i < finalBlocks.length; i++) {
       if (tooSmall.has(i)) continue;
       // Recalculer bbox et area depuis le masque réel (après P7 nettoyage)
@@ -3519,7 +3725,7 @@ const MKExtract = (function () {
 
       let blockType;
       if (finalBlocks[i].isDiamond) blockType = 'diamond';
-      else if (bh > CONTAINER_HEIGHT_THRESHOLD) blockType = 'container';
+      else if (finalBlocks[i].isContainer || bh > CONTAINER_HEIGHT_THRESHOLD) blockType = 'container';
       else blockType = 'block';
 
       manifest.blocks.push({
@@ -3542,7 +3748,7 @@ const MKExtract = (function () {
     console.log('[MKExtract] extractScratch done:', manifest.blocks.length, 'blocks',
       manifest.blocks.map(b => b.type + ' pos=(' + b.pos.x + ',' + b.pos.y + ') size=(' + b.size.w + 'x' + b.size.h + ')').join(' | '));
 
-    return { manifest, blockMasks: finalMasks, bgColor: bgColor.map(Math.round), phases, _version: '2026-02-26a-scratch-diamond-fix' };
+    return { manifest, blockMasks: finalMasks, bgColor: bgColor.map(Math.round), phases, _version: '2026-08-09-scratch-couleur-categories' };
   }
 
   // ═══════════════════════════════════════════════════════════════════

@@ -2020,17 +2020,48 @@ a:hover {
     padding: 1rem;
 }
 
+/* Doit rester identique aux règles .h5p-gamemap-* du <style> de view.php :
+   les deux feuilles stylent le même composant, ne jamais n'en corriger qu'une. */
+
 .h5p-gamemap-container {
     position: relative;
     border-radius: 12px;
     overflow: hidden;
-    background: #f5f5f5;
+    /* container-type : bordure des pastilles proportionnelle à la carte (cqw) */
+    container-type: inline-size;
 }
 
 .h5p-gamemap-bg {
     width: 100%;
     height: auto;
     display: block;
+    border-radius: 12px;
+}
+
+.h5p-gamemap-bg-empty {
+    aspect-ratio: 16 / 9;
+    background: #cfd8dc;
+}
+
+.h5p-gamemap-paths {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 5;
+}
+
+.h5p-gamemap-path {
+    stroke: var(--gm-path, rgba(255,255,255,0.904));
+    stroke-linecap: round;
+    fill: none;
+    transition: stroke 0.3s;
+}
+
+.h5p-gamemap-path.active {
+    stroke: var(--gm-path-cleared, rgba(0,130,0,0.7));
 }
 
 .h5p-gamemap-steps {
@@ -2041,94 +2072,132 @@ a:hover {
     height: 100%;
 }
 
+/* La pastille occupe la boîte décrite par telemetry (x/y = coin haut-gauche) */
 .h5p-gamemap-step {
     position: absolute;
-    transform: translate(-50%, -50%);
-    cursor: pointer;
-    text-align: center;
-    transition: transform 0.2s;
-}
-
-.h5p-gamemap-step:hover {
-    transform: translate(-50%, -50%) scale(1.1);
-}
-
-.h5p-gamemap-step-num {
+    padding: 0;
+    background: var(--gm-stage, rgba(250,223,10,0.7));
+    color: #fff;
+    border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 36px;
-    height: 36px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border-radius: 50%;
-    font-weight: bold;
-    font-size: 1rem;
-    box-shadow: 0 3px 10px rgba(0,0,0,0.3);
-    margin: 0 auto;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    transition: transform 0.2s, box-shadow 0.2s, background 0.3s;
+    z-index: 10;
+    border: 0.36cqw solid #fff;   /* 3px sur une carte de 830px, comme Éléa */
+    box-sizing: border-box;
+}
+
+.h5p-gamemap-step:hover:not(.locked),
+.h5p-gamemap-step:focus-visible:not(.locked) {
+    transform: scale(1.15);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    outline: none;
+}
+
+.h5p-gamemap-step.completed {
+    background: var(--gm-stage-cleared, rgba(0,130,0,0.7));
+}
+
+.h5p-gamemap-step.locked {
+    background: var(--gm-stage-locked, rgba(153,0,0,0.7));
+    cursor: not-allowed;
+}
+
+.h5p-gamemap-step-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 55%;
+    height: 55%;
+}
+
+.h5p-gamemap-step-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
 }
 
 .h5p-gamemap-step-label {
-    display: block;
-    margin-top: 0.25rem;
-    font-size: 0.75rem;
-    font-weight: 500;
-    background: rgba(255,255,255,0.9);
-    padding: 0.125rem 0.5rem;
-    border-radius: 4px;
+    display: none;
+    position: absolute;
+    top: 105%;
+    left: 50%;
+    transform: translateX(-50%);
     white-space: nowrap;
+    font-size: 0.7rem;
+    background: rgba(0,0,0,0.7);
+    color: white;
+    padding: 2px 6px;
+    border-radius: 3px;
+    pointer-events: none;
 }
 
-.h5p-gamemap-step.completed .h5p-gamemap-step-num {
-    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+.h5p-gamemap:not(.no-labels) .h5p-gamemap-step:hover .h5p-gamemap-step-label,
+.h5p-gamemap:not(.no-labels) .h5p-gamemap-step:focus-visible .h5p-gamemap-step-label {
+    display: block;
 }
 
+/* Le panneau d'étape recouvre la carte (et non toute la fenêtre), comme dans Éléa */
 .h5p-gamemap-modal {
-    position: fixed;
+    position: absolute;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0,0,0,0.7);
-    z-index: 1000;
+    background: rgba(0,0,0,0.55);
+    z-index: 20;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
-    padding: 2rem;
+    padding: 4%;
+    box-sizing: border-box;
 }
 
 .h5p-gamemap-modal-content {
     background: white;
-    border-radius: 12px;
-    max-width: 600px;
+    border-radius: 6px;
     width: 100%;
-    max-height: 80vh;
+    max-height: 100%;
     overflow: auto;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.35);
 }
 
 .h5p-gamemap-modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid #e0e0e0;
+    padding: 0.6rem 1.25rem 0.4rem;
+    border-bottom: 1px solid #ddd;
 }
 
 .h5p-gamemap-modal-header h4 {
     margin: 0;
-    font-size: 1.1rem;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #2c3e50;
 }
 
 .h5p-gamemap-close {
-    background: none;
-    border: none;
-    font-size: 1.5rem;
+    position: absolute;
+    top: 0.6rem;
+    right: 0.6rem;
+    width: 1.9rem;
+    height: 1.9rem;
+    border-radius: 50%;
+    background: #fff;
+    border: 1px solid #333;
+    font-size: 0.9rem;
+    line-height: 1;
     cursor: pointer;
-    color: #666;
+    color: #222;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 21;
 }
 
 .h5p-gamemap-modal-body {
-    padding: 1.5rem;
+    padding: 1.25rem;
 }
 
 .h5p-gamemap-progress {

@@ -63,15 +63,47 @@ class CourseRenderer {
      */
     public function renderSingleActivity(array $activity): string {
         $html = $this->renderActivity($activity);
-        
+
         // Afficher les labels attachés sous l'activité
         if (!empty($activity['attached_labels'])) {
             foreach ($activity['attached_labels'] as $label) {
                 $html .= $this->renderLabel($label);
             }
         }
-        
-        return $html;
+
+        return $this->deferImages($html);
+    }
+
+    /**
+     * Chargement différé des médias.
+     * Le lecteur met TOUTES les activités du cours dans le DOM et n'en montre qu'une :
+     * sans ça, ouvrir un cours téléchargeait d'un coup les images des activités masquées
+     * (mesuré : 48 requêtes en une seconde pour un cours de 4 séances, aucune image à
+     * l'écran). Cette rafale déclenchait l'anti-flood d'OVH sur l'hébergement mutualisé.
+     * Le navigateur ne charge pas une image `lazy` dont un parent est masqué : elle part
+     * quand l'élève ouvre l'activité.
+     * Jamais en mode impression (PDF) : là, tout doit être chargé.
+     */
+    private function deferImages(string $html): string {
+        if ($this->printMode || $html === '') {
+            return $html;
+        }
+        // Ne JAMAIS toucher au contenu des <script> : le lecteur y sérialise du JSON
+        // (window.quizData…) dont les guillemets sont échappés. Y injecter un attribut
+        // cassait le script — « Unexpected identifier 'lazy' », et tout le quiz avec.
+        $parts = preg_split('#(<script\b[^>]*>.*?</script>)#is', $html, -1, PREG_SPLIT_DELIM_CAPTURE);
+        if ($parts === false) {
+            return $html;
+        }
+        foreach ($parts as $i => $part) {
+            if ($i % 2 === 1) continue;   // indices impairs = blocs <script> capturés
+            $parts[$i] = preg_replace(
+                '/<img(?![^>]*\bloading\s*=)/i',
+                '<img loading="lazy" decoding="async"',
+                $part
+            );
+        }
+        return implode('', $parts);
     }
     
     private function renderActivity(array $activity): string {
@@ -127,7 +159,24 @@ class CourseRenderer {
         return ob_get_clean();
     }
     
+    /**
+     * Modules Moodle « h5pactivity » : d'ordinaire un paquet .h5p opaque, qu'on ne sait pas jouer.
+     * MAIS l'éditeur produit aussi ce type pour ses activités (previewEditorSession recopie
+     * type = h5pactivity) : quand le contenu est là et que le machine_name est connu, on le rend
+     * comme une activité hvp. Sans ça, l'aperçu d'un cours en création affichait le message
+     * « Contenu H5P au format .h5p » pour TOUS les types (parcours compris).
+     */
     private function renderH5pCore(array $activity): string {
+        $machineName = $activity['machine_name'] ?? '';
+        $content = $activity['content'] ?? [];
+        $files = $activity['files'] ?? [];
+
+        $rendered = '';
+        if (is_array($content) && !empty($content)
+            && strpos($machineName, 'H5P.') === 0 && $machineName !== 'H5P.Unknown') {
+            $rendered = $this->renderH5pContent($machineName, $content, $files);
+        }
+
         ob_start();
         ?>
         <div class="activity activity-h5p">
@@ -138,12 +187,16 @@ class CourseRenderer {
             <?php if (!empty($activity['intro'])): ?>
             <div class="activity-intro"><?= $this->processContent($activity['intro']) ?></div>
             <?php endif; ?>
-            
+
             <div class="h5p-content">
+                <?php if ($rendered !== ''): ?>
+                <?= $rendered ?>
+                <?php else: ?>
                 <div class="h5p-placeholder">
                     <p>⚠️ Contenu H5P au format .h5p</p>
                     <small>Ce type de contenu nécessite le lecteur H5P complet</small>
                 </div>
+                <?php endif; ?>
             </div>
         </div>
         <?php
@@ -171,12 +224,15 @@ class CourseRenderer {
             'H5P.CoursePresentation' => $this->renderH5pCoursePresentation($content, $files),
             'H5P.InteractiveVideo' => $this->renderH5pInteractiveVideo($content, $files),
             'H5P.ImageHotspots' => $this->renderH5pImageHotspots($content, $files),
+            'H5P.ImageMultipleHotspotQuestion' => $this->renderH5pMultiHotspot($content, $files),
             'H5P.Summary' => $this->renderH5pSummary($content, $files),
             'H5P.GameMap' => $this->renderH5pGameMap($content, $files),
+            'H5P.ImageSequencing' => $this->renderH5pImageSequencing($content, $files),
             'H5P.ThreeSixty' => $this->renderH5pVirtualTour($content, $files),
             'H5P.VirtualTour' => $this->renderH5pVirtualTour($content, $files),
             'H5P.ThreeImage' => $this->renderH5pVirtualTour($content, $files),
             'H5P.AdvancedText' => $this->renderH5pAdvancedText($content, $files),
+            'H5P.ExportableTextArea' => $this->renderH5pExportableTextArea($content, $files),
             'H5P.MultiMediaChoice' => $this->renderH5pMultiMediaChoice($content, $files),
             'H5P.Video' => $this->renderH5pVideo($content, $files),
             'H5P.Audio' => $this->renderH5pAudio($content, $files),
@@ -963,60 +1019,359 @@ class CourseRenderer {
         return ob_get_clean();
     }
 
+    /**
+     * H5P.MemoryGame : retrouver les paires de cartes.
+     * Rendu calqué sur Éléa : dos gris clair avec un « ? » à la couleur du thème
+     * (lookNFeel.themeColor), grille carrée de ceil(sqrt(n)) colonnes quand
+     * behaviour.useGrid est actif, retournement 3D, paires trouvées estompées.
+     * Une entrée de `cards` = UNE paire ; `match` porte l'image de la jumelle
+     * quand elle diffère de `image`.
+     */
     private function renderH5pMemoryGame(array $content, array $files): string {
-        $cards = $content['cards'] ?? [];
+        $rawCards = $content['cards'] ?? [];
         $id = 'h5p-memory-' . uniqid();
-        
-        if (empty($cards)) {
+
+        $pairs = [];
+        foreach ($rawCards as $card) {
+            if (!is_array($card)) continue;
+            $path = $card['image']['path'] ?? '';
+            if ($path === '') continue;
+            $matchPath = $card['match']['path'] ?? '';
+            $alt = (string)($card['imageAlt'] ?? '');
+            $pairs[] = [
+                'img'      => $path,
+                'alt'      => $alt,
+                'matchImg' => $matchPath !== '' ? $matchPath : $path,
+                'matchAlt' => (string)($card['matchAlt'] ?? $alt),
+                'desc'     => (string)($card['description'] ?? ''),
+            ];
+        }
+
+        if (empty($pairs)) {
             return '<div class="h5p-placeholder"><p>Memory sans cartes</p></div>';
         }
-        
-        $gameCards = [];
-        foreach ($cards as $i => $card) {
-            $img = $card['image']['path'] ?? '';
-            $gameCards[] = ['idx' => $i, 'img' => $img, 'match' => $i];
-            $gameCards[] = ['idx' => $i, 'img' => $img, 'match' => $i];
+
+        $behaviour = $content['behaviour'] ?? [];
+
+        // numCardsToUse : Éléa ne tire qu'un sous-ensemble des paires (au moins 2)
+        $numToUse = (int)($behaviour['numCardsToUse'] ?? 0);
+        if (!$this->printMode && $numToUse >= 2 && $numToUse < count($pairs)) {
+            $keys = (array)array_rand($pairs, $numToUse);
+            $subset = [];
+            foreach ($keys as $k) $subset[] = $pairs[$k];
+            $pairs = $subset;
         }
-        shuffle($gameCards);
-        
-        ob_start();
-        ?>
-        <div class="h5p-memorygame" id="<?= $id ?>">
-            <div class="h5p-memory-grid">
-                <?php foreach ($gameCards as $ci => $card): ?>
-                <div class="h5p-memory-card" data-match="<?= $card['match'] ?>" onclick="flipMemoryCard(this, '<?= $id ?>')">
-                    <div class="h5p-memory-front">?</div>
-                    <div class="h5p-memory-back">
-                        <?php if ($card['img']): ?>
-                        <img src="<?= $this->getH5pFileUrl($card['img'], $files) ?>">
-                        <?php else: ?>
-                        <span><?= $card['idx'] + 1 ?></span>
+
+        $lookNFeel  = $content['lookNFeel'] ?? [];
+        $themeColor = (string)($lookNFeel['themeColor'] ?? '#909090');
+        if (!preg_match('/^#[0-9a-fA-F]{3,8}$/', $themeColor)) {
+            $themeColor = '#909090';
+        }
+        $backPath = $lookNFeel['cardBack']['path'] ?? '';
+
+        $l10n = $content['l10n'] ?? [];
+        $txt = [
+            'timeSpent'    => (string)($l10n['timeSpent']    ?? 'Temps écoulé :'),
+            'cardTurns'    => (string)($l10n['cardTurns']    ?? 'Cartes retournées :'),
+            'feedback'     => (string)($l10n['feedback']     ?? 'Bien joué !'),
+            'tryAgain'     => (string)($l10n['tryAgain']     ?? 'Réessayer'),
+            'closeLabel'   => (string)($l10n['closeLabel']   ?? 'Fermer'),
+            'label'        => (string)($l10n['label']        ?? 'Jeu de mémoire. Trouver les cartes qui se correspondent.'),
+            'cardPrefix'   => (string)($l10n['cardPrefix']   ?? 'Carte %num sur %total:'),
+            'cardUnturned' => (string)($l10n['cardUnturned'] ?? 'Non retournée.'),
+            'cardTurned'   => (string)($l10n['cardTurned']   ?? 'Retournée.'),
+            'cardMatched'  => (string)($l10n['cardMatched']  ?? 'Correspondance trouvée.'),
+        ];
+
+        // Impression : les paires côte à côte, numérotées (corrigé papier)
+        if ($this->printMode) {
+            ob_start();
+            ?>
+            <div class="h5p-memo-print">
+                <div class="h5p-memo-print-pairs">
+                    <?php foreach ($pairs as $i => $p): ?>
+                    <div class="h5p-memo-print-pair">
+                        <span class="h5p-memo-print-num"><?= $i + 1 ?></span>
+                        <div class="h5p-memo-print-imgs">
+                            <img src="<?= $this->getH5pFileUrl($p['img'], $files) ?>" alt="<?= htmlspecialchars($p['alt']) ?>">
+                            <img src="<?= $this->getH5pFileUrl($p['matchImg'], $files) ?>" alt="<?= htmlspecialchars($p['matchAlt']) ?>">
+                        </div>
+                        <?php if ($p['desc'] !== ''): ?>
+                        <div class="h5p-memo-print-desc"><?= htmlspecialchars($p['desc']) ?></div>
                         <?php endif; ?>
                     </div>
+                    <?php endforeach; ?>
                 </div>
-                <?php endforeach; ?>
             </div>
-            <div class="h5p-memory-info">
-                <span>Paires : <strong class="h5p-memory-score">0</strong> / <?= count($cards) ?></span>
-                <button class="btn btn-secondary btn-sm" onclick="resetMemoryGame('<?= $id ?>')">Recommencer</button>
+            <?php
+            return ob_get_clean();
+        }
+
+        $allowRetry = ($behaviour['allowRetry'] ?? true) !== false;
+        $useGrid    = ($behaviour['useGrid'] ?? true) !== false;
+        $total      = count($pairs) * 2;
+        // Éléa : grille carrée => ceil(racine(nombre de cartes)) colonnes
+        $cols       = max(2, (int)ceil(sqrt($total)));
+
+        // Le paquet est émis paire par paire ; le mélange se fait en JS (comme Éléa),
+        // ce qui permet de re-mélanger sans recharger la page.
+        $deck = [];
+        foreach ($pairs as $i => $p) {
+            $deck[] = ['pair' => $i, 'img' => $p['img'],      'alt' => $p['alt'],      'desc' => $p['desc']];
+            $deck[] = ['pair' => $i, 'img' => $p['matchImg'], 'alt' => $p['matchAlt'], 'desc' => $p['desc']];
+        }
+
+        ob_start();
+        ?>
+        <div class="h5p-memorygame" id="<?= $id ?>" style="--memo-color: <?= htmlspecialchars($themeColor) ?>;"
+             role="application" aria-label="<?= htmlspecialchars($txt['label']) ?>">
+            <ul class="h5p-memory-grid<?= $useGrid ? '' : ' h5p-memory-free' ?>" style="--memo-cols: <?= $cols ?>;">
+                <?php foreach ($deck as $ci => $card): ?>
+                <li class="h5p-memory-wrap">
+                    <div class="h5p-memory-card" role="button" tabindex="0"
+                         data-pair="<?= $card['pair'] ?>"
+                         data-desc="<?= htmlspecialchars($card['desc']) ?>"
+                         onclick="flipMemoryCard(this, '<?= $id ?>')"
+                         onkeydown="memoryCardKey(event, this, '<?= $id ?>')">
+                        <span class="h5p-memory-face h5p-memory-front" aria-hidden="true">
+                            <?php if ($backPath !== ''): ?>
+                            <img src="<?= $this->getH5pFileUrl($backPath, $files) ?>" alt="">
+                            <?php else: ?>
+                            <span class="h5p-memory-qmark">?</span>
+                            <?php endif; ?>
+                        </span>
+                        <span class="h5p-memory-face h5p-memory-back">
+                            <img src="<?= $this->getH5pFileUrl($card['img'], $files) ?>" alt="<?= htmlspecialchars($card['alt']) ?>">
+                        </span>
+                    </div>
+                </li>
+                <?php endforeach; ?>
+            </ul>
+
+            <dl class="h5p-memory-status">
+                <dt><?= htmlspecialchars($txt['timeSpent']) ?></dt>
+                <dd class="h5p-memory-timer">00:00:00</dd>
+                <dt><?= htmlspecialchars($txt['cardTurns']) ?></dt>
+                <dd class="h5p-memory-counter">0</dd>
+            </dl>
+
+            <div class="h5p-memory-done" style="display: none;">
+                <span class="h5p-memory-done-text"><?= htmlspecialchars($txt['feedback']) ?></span>
+                <?php if ($allowRetry): ?>
+                <button type="button" class="h5p-memory-retry" onclick="resetMemoryGame('<?= $id ?>')">
+                    <span aria-hidden="true">↻</span> <?= htmlspecialchars($txt['tryAgain']) ?>
+                </button>
+                <?php endif; ?>
+            </div>
+
+            <div class="h5p-memory-popup" style="display: none;" onclick="closeMemoryPopup('<?= $id ?>')">
+                <div class="h5p-memory-popup-inner" onclick="event.stopPropagation();">
+                    <p class="h5p-memory-popup-text"></p>
+                    <button type="button" class="h5p-memory-popup-close" onclick="closeMemoryPopup('<?= $id ?>')">
+                        <?= htmlspecialchars($txt['closeLabel']) ?>
+                    </button>
+                </div>
             </div>
         </div>
+        <script>
+            window.memoryGameState = window.memoryGameState || {};
+            window.memoryGameState['<?= $id ?>'] = {
+                pairs: <?= count($pairs) ?>,
+                found: 0,
+                flips: 0,
+                seconds: 0,
+                timer: null,
+                opened: [],
+                done: false,
+                l10n: <?= json_encode([
+                    'cardPrefix'   => $txt['cardPrefix'],
+                    'cardUnturned' => $txt['cardUnturned'],
+                    'cardTurned'   => $txt['cardTurned'],
+                    'cardMatched'  => $txt['cardMatched'],
+                ]) ?>
+            };
+            initMemoryGame('<?= $id ?>');
+        </script>
         <?php
         return ob_get_clean();
     }
-    
+
+
+    /**
+     * H5P.ImageSequencing : remettre des images dans le bon ordre.
+     * L'ordre de sequenceImages EST la solution ; les cartes sont mélangées à l'affichage,
+     * comme dans Éléa.
+     */
+    private function renderH5pImageSequencing(array $content, array $files): string {
+        $id = 'h5p-is-' . uniqid();
+        $cards = $content['sequenceImages'] ?? [];
+        if (empty($cards)) {
+            return '<div class="h5p-placeholder"><p>Séquence d\'images sans carte</p></div>';
+        }
+
+        $task = $content['taskDescription'] ?? '';
+
+        // Impression : les images dans l'ordre attendu, numérotées (corrigé papier)
+        if ($this->printMode) {
+            ob_start();
+            ?>
+            <div class="h5p-is-print">
+                <?php if ($task !== ''): ?>
+                <div class="h5p-is-print-task"><?= $this->processH5pText($task, $files) ?></div>
+                <?php endif; ?>
+                <div class="h5p-is-print-cards">
+                    <?php foreach ($cards as $i => $card):
+                        $path = $card['image']['path'] ?? '';
+                        $desc = $card['imageDescription'] ?? '';
+                    ?>
+                    <div class="h5p-is-print-card">
+                        <span class="h5p-is-print-num"><?= $i + 1 ?></span>
+                        <?php if ($path !== ''): ?>
+                        <img src="<?= $this->getH5pFileUrl($path, $files) ?>" alt="<?= htmlspecialchars($desc) ?>">
+                        <?php endif; ?>
+                        <div class="h5p-is-print-label"><?= htmlspecialchars($desc) ?></div>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            <?php
+            return ob_get_clean();
+        }
+
+        $behaviour = $content['behaviour'] ?? [];
+        $showSolution = ($behaviour['enableSolution'] ?? true) !== false;
+        $enableRetry = ($behaviour['enableRetry'] ?? true) !== false;
+
+        $l10n = $content['l10n'] ?? [];
+        $txt = [
+            'timeSpent'    => $l10n['timeSpent']    ?? 'Time spent',
+            'totalMoves'   => $l10n['totalMoves']   ?? 'Total Moves',
+            'checkAnswer'  => $l10n['checkAnswer']  ?? 'Check',
+            'showSolution' => $l10n['showSolution'] ?? 'ShowSolution',
+            'tryAgain'     => $l10n['tryAgain']     ?? 'Retry',
+            'score'        => $l10n['score']        ?? 'You got @score of @total points',
+        ];
+
+        ob_start();
+        ?>
+        <div class="h5p-imageseq" id="<?= $id ?>">
+            <?php if ($task !== ''): ?>
+            <div class="h5p-is-task"><?= $this->processH5pText($task, $files) ?></div>
+            <?php endif; ?>
+            <div class="h5p-is-cards">
+                <?php foreach ($cards as $i => $card):
+                    $path = $card['image']['path'] ?? '';
+                    $desc = $card['imageDescription'] ?? '';
+                ?>
+                <div class="h5p-is-card" draggable="true" data-solution="<?= $i ?>"
+                     ondragstart="isDragStart(event, '<?= $id ?>', <?= $i ?>)"
+                     ondragover="isDragOver(event)"
+                     ondrop="isDrop(event, '<?= $id ?>', <?= $i ?>)"
+                     ondragend="isDragEnd(event)"
+                     onclick="isTapCard('<?= $id ?>', <?= $i ?>)">
+                    <div class="h5p-is-card-img">
+                        <?php if ($path !== ''): ?>
+                        <img src="<?= $this->getH5pFileUrl($path, $files) ?>" alt="<?= htmlspecialchars($desc) ?>" draggable="false">
+                        <?php endif; ?>
+                        <span class="h5p-is-mark"></span>
+                    </div>
+                    <?php if ($desc !== ''): ?>
+                    <div class="h5p-is-card-label"><?= htmlspecialchars($desc) ?></div>
+                    <?php endif; ?>
+                </div>
+                <?php endforeach; ?>
+            </div>
+            <div class="h5p-is-footer">
+                <div class="h5p-is-stats">
+                    <div class="h5p-is-stat">
+                        <span class="h5p-is-stat-label"><?= htmlspecialchars($txt['timeSpent']) ?></span>
+                        <span class="h5p-is-stat-value h5p-is-time">0:00</span>
+                    </div>
+                    <div class="h5p-is-stat">
+                        <span class="h5p-is-stat-label"><?= htmlspecialchars($txt['totalMoves']) ?></span>
+                        <span class="h5p-is-stat-value h5p-is-moves">0</span>
+                    </div>
+                </div>
+                <div class="h5p-is-buttons">
+                    <button type="button" class="h5p-is-btn h5p-is-check" onclick="isCheckOrder('<?= $id ?>')">
+                        <span aria-hidden="true">✔</span> <?= htmlspecialchars($txt['checkAnswer']) ?>
+                    </button>
+                    <?php if ($showSolution): ?>
+                    <button type="button" class="h5p-is-btn h5p-is-solution" onclick="isShowSolution('<?= $id ?>')">
+                        <span aria-hidden="true">👁</span> <?= htmlspecialchars($txt['showSolution']) ?>
+                    </button>
+                    <?php endif; ?>
+                    <?php if ($enableRetry): ?>
+                    <button type="button" class="h5p-is-btn h5p-is-retry" style="display:none;" onclick="isRetry('<?= $id ?>')">
+                        <span aria-hidden="true">↻</span> <?= htmlspecialchars($txt['tryAgain']) ?>
+                    </button>
+                    <?php endif; ?>
+                </div>
+                <div class="h5p-is-feedback" style="display:none;"></div>
+            </div>
+        </div>
+        <script>
+            window.imageSeqState = window.imageSeqState || {};
+            window.imageSeqState['<?= $id ?>'] = {
+                total: <?= count($cards) ?>,
+                moves: 0,
+                seconds: 0,
+                timer: null,
+                selected: null,
+                done: false,
+                scoreText: <?= json_encode($txt['score']) ?>
+            };
+            initImageSequencing('<?= $id ?>');
+        </script>
+        <?php
+        return ob_get_clean();
+    }
+
+    /**
+     * H5P.GameMap : carte avec des étapes reliées par des chemins.
+     * Les couleurs, le style des chemins et la taille des pastilles viennent du contenu
+     * (visual.stages / visual.paths / telemetry) pour rendre exactement comme Éléa.
+     * telemetry.x/y est le COIN HAUT-GAUCHE de la pastille, pas son centre.
+     */
     private function renderH5pGameMap(array $content, array $files): string {
         $id = 'h5p-gamemap-' . uniqid();
-        
-        // Structure correcte: gamemapSteps.backgroundImageSettings.backgroundImage et gamemapSteps.gamemap.elements
+
         $background = $content['gamemapSteps']['backgroundImageSettings']['backgroundImage'] ?? null;
         $steps = $content['gamemapSteps']['gamemap']['elements'] ?? [];
-        
+
         if (empty($steps)) {
             return '<div class="h5p-placeholder"><p>Game Map sans étapes</p></div>';
         }
-        
-        // Trouver le point de départ et le dernier point
+
+        // Apparence : reprendre les réglages du contenu, avec les défauts d'Éléa
+        $visual = $content['visual'] ?? [];
+        $colorStage        = $visual['stages']['colorStage']        ?? 'rgba(250, 223, 10, 0.7)';
+        $colorStageLocked  = $visual['stages']['colorStageLocked']  ?? 'rgba(153, 0, 0, 0.7)';
+        $colorStageCleared = $visual['stages']['colorStageCleared'] ?? 'rgba(0, 130, 0, 0.7)';
+        $pathStyleCfg      = $visual['paths']['style'] ?? [];
+        $colorPath         = $pathStyleCfg['colorPath']        ?? 'rgba(255, 255, 255, 0.904)';
+        $colorPathCleared  = $pathStyleCfg['colorPathCleared']  ?? 'rgba(0, 130, 0, 0.7)';
+        $pathWidth         = (float)($pathStyleCfg['pathWidth'] ?? 0.2);
+        $pathStyle         = $pathStyleCfg['pathStyle'] ?? 'dotted';
+        $displayPaths      = ($visual['paths']['displayPaths'] ?? true) !== false;
+        $showLabels        = ($content['behaviour']['map']['showLabels'] ?? true) !== false;
+
+        // Le SVG est gradué en % de la LARGEUR de la carte sur les deux axes : sans cela
+        // (viewBox carré étiré) les pointillés ronds deviendraient des ellipses.
+        $bgW = floatval($background['width'] ?? 0);
+        $bgH = floatval($background['height'] ?? 0);
+        $mapRatio = ($bgW > 0 && $bgH > 0) ? ($bgH / $bgW) : (9 / 16);
+        $viewH = 100 * $mapRatio;
+
+        // Épaisseur et espacement exprimés en % de la largeur de la carte, comme H5P
+        $strokeWidth = max(0.1, $pathWidth * 3);
+        $dashArray = match($pathStyle) {
+            'dashed' => ($strokeWidth * 3) . ',' . ($strokeWidth * 2),
+            'solid'  => 'none',
+            default  => '0.01,' . ($strokeWidth * 2.2),   // pointillés ronds
+        };
+
+        // Point de départ et étape finale
         $startStep = 0;
         foreach ($steps as $i => $step) {
             if (!empty($step['canBeStartStage'])) {
@@ -1025,118 +1380,146 @@ class CourseRenderer {
             }
         }
         $lastStep = count($steps) - 1;
-        
-        // Préparer les données de connexion pour le SVG
+
+        // Centre de chaque pastille, pour tracer les chemins
+        $centers = [];
+        foreach ($steps as $i => $step) {
+            $t = $step['telemetry'] ?? [];
+            $centers[$i] = [
+                'x' => floatval($t['x'] ?? 50) + floatval($t['width'] ?? 4.375) / 2,
+                'y' => floatval($t['y'] ?? 50) + floatval($t['height'] ?? 7.814) / 2,
+            ];
+        }
+
         $connections = [];
         foreach ($steps as $i => $step) {
-            $neighbors = $step['neighbors'] ?? [];
-            $x1 = floatval($step['telemetry']['x'] ?? 50);
-            $y1 = floatval($step['telemetry']['y'] ?? 50);
-            foreach ($neighbors as $neighborIdx) {
+            foreach ($step['neighbors'] ?? [] as $neighborIdx) {
                 $ni = intval($neighborIdx);
-                // Éviter les doublons (on ne trace que vers les indices supérieurs)
-                if ($ni > $i && isset($steps[$ni])) {
-                    $x2 = floatval($steps[$ni]['telemetry']['x'] ?? 50);
-                    $y2 = floatval($steps[$ni]['telemetry']['y'] ?? 50);
-                    $connections[] = ['x1' => $x1, 'y1' => $y1, 'x2' => $x2, 'y2' => $y2, 'from' => $i, 'to' => $ni];
+                // Une seule ligne par paire : on ne trace que vers les indices supérieurs
+                if ($ni > $i && isset($centers[$ni])) {
+                    $connections[] = [
+                        'x1' => $centers[$i]['x'], 'y1' => $centers[$i]['y'],
+                        'x2' => $centers[$ni]['x'], 'y2' => $centers[$ni]['y'],
+                        'from' => $i, 'to' => $ni,
+                    ];
                 }
             }
         }
-        
+
+        $lockIcon = '<svg class="h5p-gamemap-step-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+                  . '<path d="M18 8h-1V6a5 5 0 0 0-10 0v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM9 6a3 3 0 0 1 6 0v2H9V6z"/></svg>';
+        $starIcon = '<svg class="h5p-gamemap-step-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+                  . '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
+
+        $styleVars = 'style="'
+            . '--gm-stage:' . htmlspecialchars($colorStage) . ';'
+            . '--gm-stage-locked:' . htmlspecialchars($colorStageLocked) . ';'
+            . '--gm-stage-cleared:' . htmlspecialchars($colorStageCleared) . ';'
+            . '--gm-path:' . htmlspecialchars($colorPath) . ';'
+            . '--gm-path-cleared:' . htmlspecialchars($colorPathCleared) . ';'
+            . '"';
+
         ob_start();
         ?>
-        <div class="h5p-gamemap" id="<?= $id ?>" data-start="<?= $startStep ?>" data-last="<?= $lastStep ?>">
+        <div class="h5p-gamemap<?= $showLabels ? '' : ' no-labels' ?>" id="<?= $id ?>" <?= $styleVars ?>
+             data-start="<?= $startStep ?>" data-last="<?= $lastStep ?>">
             <div class="h5p-gamemap-container">
                 <?php if ($background && !empty($background['path'])): ?>
                 <img class="h5p-gamemap-bg" src="<?= $this->getH5pFileUrl($background['path'], $files) ?>" alt="Carte">
+                <?php else: ?>
+                <div class="h5p-gamemap-bg h5p-gamemap-bg-empty"></div>
                 <?php endif; ?>
-                
-                <!-- SVG pour les chemins -->
-                <svg class="h5p-gamemap-paths" viewBox="0 0 100 100" preserveAspectRatio="none">
+
+                <?php if ($displayPaths): ?>
+                <svg class="h5p-gamemap-paths" viewBox="0 0 100 <?= $viewH ?>" preserveAspectRatio="none">
                     <?php foreach ($connections as $conn): ?>
-                    <line class="h5p-gamemap-path" 
-                          x1="<?= $conn['x1'] ?>" y1="<?= $conn['y1'] ?>" 
-                          x2="<?= $conn['x2'] ?>" y2="<?= $conn['y2'] ?>"
+                    <line class="h5p-gamemap-path"
+                          x1="<?= $conn['x1'] ?>" y1="<?= $conn['y1'] * $mapRatio ?>"
+                          x2="<?= $conn['x2'] ?>" y2="<?= $conn['y2'] * $mapRatio ?>"
+                          stroke-width="<?= $strokeWidth ?>"
+                          stroke-dasharray="<?= htmlspecialchars($dashArray) ?>"
                           data-from="<?= $conn['from'] ?>" data-to="<?= $conn['to'] ?>"/>
                     <?php endforeach; ?>
                 </svg>
-                
+                <?php endif; ?>
+
                 <div class="h5p-gamemap-steps">
-                    <?php foreach ($steps as $i => $step): 
+                    <?php foreach ($steps as $i => $step):
                         $label = $step['label'] ?? ('Étape ' . ($i + 1));
-                        $x = floatval($step['telemetry']['x'] ?? 50);
-                        $y = floatval($step['telemetry']['y'] ?? 50);
+                        $t = $step['telemetry'] ?? [];
+                        $x = floatval($t['x'] ?? 50);
+                        $y = floatval($t['y'] ?? 50);
+                        $w = floatval($t['width'] ?? 4.375);
+                        $h = floatval($t['height'] ?? 7.814);
                         $neighbors = json_encode($step['neighbors'] ?? []);
                         $isStart = ($i === $startStep);
-                        $isLast = ($i === $lastStep);
                         $isLocked = !$isStart;
                     ?>
-                    <div class="h5p-gamemap-step <?= $isLocked ? 'locked' : '' ?> <?= $isLast ? 'final' : '' ?>" 
-                         style="left: <?= $x ?>%; top: <?= $y ?>%;"
-                         data-step="<?= $i ?>"
-                         data-neighbors='<?= $neighbors ?>'
-                         data-locked="<?= $isLocked ? 'true' : 'false' ?>"
-                         onclick="openGameMapStep('<?= $id ?>', <?= $i ?>)">
-                        <span class="h5p-gamemap-step-icon"><?= $isLocked ? '🔒' : ($isLast ? '🏁' : ($i + 1)) ?></span>
+                    <button type="button"
+                            class="h5p-gamemap-step<?= $isLocked ? ' locked' : '' ?>"
+                            style="left: <?= $x ?>%; top: <?= $y ?>%; width: <?= $w ?>%; height: <?= $h ?>%;"
+                            data-step="<?= $i ?>"
+                            data-neighbors='<?= $neighbors ?>'
+                            data-locked="<?= $isLocked ? 'true' : 'false' ?>"
+                            aria-label="<?= htmlspecialchars($label) ?>"
+                            onclick="openGameMapStep('<?= $id ?>', <?= $i ?>)">
+                        <span class="h5p-gamemap-step-icon"><?= $isLocked ? $lockIcon : '' ?></span>
                         <span class="h5p-gamemap-step-label"><?= htmlspecialchars($label) ?></span>
-                    </div>
+                    </button>
                     <?php endforeach; ?>
                 </div>
-            </div>
-            
-            <!-- Modals pour chaque étape -->
-            <?php foreach ($steps as $i => $step): 
-                $label = $step['label'] ?? ('Étape ' . ($i + 1));
-                $library = $step['contentType']['library'] ?? '';
-                $params = $step['contentType']['params'] ?? [];
-                $isLast = ($i === $lastStep);
-            ?>
-            <div class="h5p-gamemap-modal" id="<?= $id ?>-step-<?= $i ?>" style="display:none;">
-                <div class="h5p-gamemap-modal-content">
-                    <div class="h5p-gamemap-modal-header">
-                        <h4><?= $isLast ? '🎉 ' : '' ?><?= htmlspecialchars($label) ?></h4>
-                        <button class="h5p-gamemap-close" onclick="closeGameMapStep('<?= $id ?>', <?= $i ?>)">✕</button>
-                    </div>
-                    <div class="h5p-gamemap-modal-body">
-                        <?php 
-                        if ($isLast && empty($library) && empty($params['text'])) {
-                            // Message de fin par défaut
-                            echo '<div class="h5p-gamemap-finish"><div class="h5p-gamemap-finish-icon">🎉</div><h3>Félicitations !</h3><p>Vous avez terminé cette activité.</p></div>';
-                        } elseif (!empty($library)) {
-                            $machineName = explode(' ', $library)[0] ?? '';
+
+                <!-- Panneau d'étape : recouvre la carte, comme dans Éléa -->
+                <?php foreach ($steps as $i => $step):
+                    $label = $step['label'] ?? ('Étape ' . ($i + 1));
+                    $library = $step['contentType']['library'] ?? '';
+                    $params = $step['contentType']['params'] ?? [];
+                    $isFinish = (($step['specialStageType'] ?? '') === 'finish') || ($i === $lastStep);
+                ?>
+                <div class="h5p-gamemap-modal" id="<?= $id ?>-step-<?= $i ?>" style="display:none;">
+                    <button class="h5p-gamemap-close" aria-label="Fermer"
+                            onclick="closeGameMapStep('<?= $id ?>', <?= $i ?>)">✕</button>
+                    <div class="h5p-gamemap-modal-content">
+                        <div class="h5p-gamemap-modal-header">
+                            <h4><?= htmlspecialchars($label) ?></h4>
+                        </div>
+                        <div class="h5p-gamemap-modal-body">
+                            <?php
+                            $machineName = $library ? (explode(' ', $library)[0] ?? '') : '';
                             if ($machineName) {
                                 echo $this->renderH5pContent($machineName, $params, $files);
-                            }
-                        } else {
-                            $text = $params['text'] ?? '';
-                            if ($text) {
-                                $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                            } elseif (!empty($params['text'])) {
+                                $text = html_entity_decode($params['text'], ENT_QUOTES | ENT_HTML5, 'UTF-8');
                                 echo '<div class="h5p-generic-content">' . $this->processH5pText($text, $files) . '</div>';
+                            } elseif ($isFinish) {
+                                echo '<div class="h5p-gamemap-finish"><div class="h5p-gamemap-finish-icon">🎉</div>'
+                                   . '<h3>Félicitations !</h3><p>Vous avez terminé cette activité.</p></div>';
                             }
-                        }
-                        ?>
+                            ?>
+                        </div>
                     </div>
                 </div>
+                <?php endforeach; ?>
             </div>
-            <?php endforeach; ?>
-            
+
             <div class="h5p-gamemap-progress">
                 <span>Progression : <strong class="h5p-gamemap-completed">0</strong> / <?= count($steps) ?></span>
             </div>
         </div>
         <script>
             window.gameMapState = window.gameMapState || {};
-            window.gameMapState['<?= $id ?>'] = { 
-                completed: new Set(), 
+            window.gameMapState['<?= $id ?>'] = {
+                completed: [],
                 total: <?= count($steps) ?>,
                 start: <?= $startStep ?>,
-                last: <?= $lastStep ?>
+                last: <?= $lastStep ?>,
+                starIcon: <?= json_encode($starIcon) ?>
             };
         </script>
         <?php
         return ob_get_clean();
     }
-    
+
     private function renderH5pVirtualTour(array $content, array $files): string {
         $id = 'h5p-vt-' . uniqid();
         
@@ -1595,6 +1978,11 @@ class CourseRenderer {
                         if ($rotation) {
                             $style .= "transform:rotate({$rotation}deg);";
                         }
+                        // La zone de saisie mémorise la réponse : lui transmettre son identifiant
+                        // de sous-contenu, seule clé stable d'une session à l'autre.
+                        if ($machineName === 'H5P.ExportableTextArea') {
+                            $params['_subContentId'] = $element['action']['subContentId'] ?? '';
+                        }
                     ?>
                     <div class="h5p-cp-element" style="<?= $style ?>">
                         <?php if ($machineName === 'H5P.Text' || $machineName === 'H5P.AdvancedText'): ?>
@@ -1762,6 +2150,8 @@ class CourseRenderer {
                         <?= $this->renderH5pDragQuestionPrint($params, $files) ?>
                         <?php elseif ($machineName === 'H5P.Dialogcards' || $machineName === 'H5P.DialogCards'): ?>
                         <?= $this->renderH5pDialogCardsPrint($params, $files) ?>
+                        <?php elseif ($machineName === 'H5P.ExportableTextArea'): ?>
+                        <?= $this->renderH5pExportableTextAreaPrint($params, $files) ?>
                         <?php elseif ($machineName === 'H5P.Video'): ?>
                         <?= $this->renderH5pVideo($params, $files) ?>
                         <?php elseif (!empty($machineName)): ?>
@@ -1777,6 +2167,23 @@ class CourseRenderer {
         return ob_get_clean();
     }
     
+    /**
+     * Rendu ExportableTextArea pour impression : consigne + lignes vierges à remplir
+     */
+    private function renderH5pExportableTextAreaPrint(array $params, array $files): string {
+        $label = $params['label'] ?? '';
+        ob_start();
+        ?>
+        <div class="h5p-eta-print">
+            <?php if ($label !== ''): ?>
+            <div class="h5p-eta-print-label"><?= $this->processH5pText($label, $files) ?></div>
+            <?php endif; ?>
+            <div class="h5p-eta-print-lines"><span></span><span></span><span></span></div>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
     /**
      * Rendu MultiChoice pour impression
      */
@@ -1982,7 +2389,10 @@ class CourseRenderer {
         ob_start();
         ?>
         <div class="h5p-audio-minimal" id="<?= $id ?>" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;">
-            <audio preload="metadata"<?= $autoplay ? ' autoplay' : '' ?> style="display:none;">
+            <!-- preload="none" : le bouton n'affiche ni durée ni progression, aucune raison de
+                 télécharger le MP3 avant le clic. Un cours à 27 consignes audio déclenchait
+                 sinon 27 requêtes au chargement, activité masquée ou non. -->
+            <audio preload="<?= $autoplay ? 'metadata' : 'none' ?>"<?= $autoplay ? ' autoplay' : '' ?> style="display:none;">
                 <source src="<?= htmlspecialchars($src) ?>" type="<?= htmlspecialchars($mime) ?>">
                 <?= $notSupported ?>
             </audio>
@@ -2858,6 +3268,88 @@ class CourseRenderer {
         return ob_get_clean();
     }
     
+    /**
+     * H5P.ImageMultipleHotspotQuestion (« Trouver les zones ») : une image de fond et des
+     * zones à retrouver au clic. x/y/width/height sont des POURCENTAGES de l'image de fond ;
+     * x/y désignent le COIN HAUT-GAUCHE de la zone, pas son centre.
+     * Comme dans Éléa : une zone juste se marque d'une pastille verte, un clic à côté
+     * d'une croix rouge, et une barre de score « trouvées / total » s'affiche dessous.
+     */
+    private function renderH5pMultiHotspot(array $content, array $files): string {
+        $q = $content['imageMultipleHotspotQuestion'] ?? [];
+        $bgSettings = $q['backgroundImageSettings'] ?? [];
+        $image = $bgSettings['backgroundImage'] ?? [];
+        $hotspots = $q['hotspotSettings']['hotspot'] ?? [];
+
+        if (empty($image['path'])) {
+            return '<div class="h5p-placeholder"><p>Zones à trouver : image de fond manquante</p></div>';
+        }
+
+        $id = 'h5p-fmh-' . uniqid();
+        $imgUrl = $this->getH5pFileUrl($image['path'], $files);
+
+        // Normaliser les zones ; une zone sans « correct » explicite est une bonne réponse
+        $zones = [];
+        foreach ($hotspots as $hs) {
+            $cs = $hs['computedSettings'] ?? [];
+            $us = $hs['userSettings'] ?? [];
+            if (!isset($cs['x'], $cs['y'])) continue;
+            $zones[] = [
+                'x'       => (float)$cs['x'],
+                'y'       => (float)$cs['y'],
+                'w'       => (float)($cs['width'] ?? 5),
+                'h'       => (float)($cs['height'] ?? 5),
+                'figure'  => ($cs['figure'] ?? 'circle') === 'rectangle' ? 'rectangle' : 'circle',
+                'correct' => ($us['correct'] ?? true) !== false,
+                'feedback' => (string)($us['feedbackText'] ?? ''),
+            ];
+        }
+        $total = count(array_filter($zones, fn($z) => $z['correct']));
+
+        // Impression : l'image avec toutes les bonnes zones entourées (corrigé papier)
+        if ($this->printMode) {
+            ob_start();
+            ?>
+            <div class="h5p-fmh-print">
+                <div class="h5p-fmh-print-image">
+                    <img src="<?= $imgUrl ?>" alt="">
+                    <?php foreach ($zones as $z): if (!$z['correct']) continue; ?>
+                    <span class="h5p-fmh-print-zone<?= $z['figure'] === 'rectangle' ? ' rect' : '' ?>"
+                          style="left:<?= $z['x'] ?>%;top:<?= $z['y'] ?>%;width:<?= $z['w'] ?>%;height:<?= $z['h'] ?>%;"></span>
+                    <?php endforeach; ?>
+                </div>
+                <p class="h5p-fmh-print-note"><?= $total ?> zone<?= $total > 1 ? 's' : '' ?> à trouver</p>
+            </div>
+            <?php
+            return ob_get_clean();
+        }
+
+        ob_start();
+        ?>
+        <div class="h5p-fmh" id="<?= $id ?>">
+            <div class="h5p-fmh-image" onclick="fmhClick(event, '<?= $id ?>')">
+                <img src="<?= $imgUrl ?>" alt="" draggable="false">
+                <div class="h5p-fmh-marques"></div>
+            </div>
+            <div class="h5p-fmh-bar">
+                <div class="h5p-fmh-jauge"><span class="h5p-fmh-jauge-fill" style="width:0%;"></span></div>
+                <span class="h5p-fmh-etoile" aria-hidden="true">★</span>
+                <span class="h5p-fmh-score"><span class="h5p-fmh-trouvees">0</span> / <?= $total ?></span>
+            </div>
+            <div class="h5p-fmh-feedback" style="display:none;"></div>
+        </div>
+        <script>
+            window.fmhState = window.fmhState || {};
+            window.fmhState['<?= $id ?>'] = {
+                zones: <?= json_encode($zones) ?>,
+                total: <?= $total ?>,
+                trouvees: []
+            };
+        </script>
+        <?php
+        return ob_get_clean();
+    }
+
     private function renderH5pSummary(array $content, array $files): string {
         $summaries = $content['summaries'] ?? [];
         $intro = $content['intro'] ?? '';
@@ -2903,6 +3395,46 @@ class CourseRenderer {
         return '<div class="h5p-advanced-text">' . $this->processH5pText($text, $files) . '</div>';
     }
     
+    /**
+     * H5P.ExportableTextArea : consigne (label) + zone de saisie libre pour l'élève.
+     * Éléa mémorise la saisie côté serveur (content user data) ; ici on la conserve
+     * en localStorage pour qu'elle survive au changement de slide et au rechargement.
+     */
+    private function renderH5pExportableTextArea(array $content, array $files): string {
+        $id = 'h5p-eta-' . uniqid();
+        $label = $content['label'] ?? '';
+        $placeholder = $content['placeholder'] ?? '';
+        // Clé de persistance stable : le subContentId suit l'élément d'une session à l'autre.
+        $key = $content['_subContentId'] ?? ($content['index'] ?? '');
+        $courseKey = (string)($this->courseData['id'] ?? $this->courseData['name'] ?? '');
+        $storageKey = 'elea_eta_' . md5($courseKey . '|' . $key . '|' . strip_tags($label));
+
+        ob_start();
+        ?>
+        <div class="h5p-eta" id="<?= $id ?>" data-storage-key="<?= htmlspecialchars($storageKey) ?>">
+            <?php if ($label !== ''): ?>
+            <div class="h5p-eta-label"><?= $this->processH5pText($label, $files) ?></div>
+            <?php endif; ?>
+            <textarea class="h5p-eta-input" rows="3" spellcheck="false"
+                      placeholder="<?= htmlspecialchars($placeholder) ?>"></textarea>
+        </div>
+        <script>
+        (function() {
+            var wrap = document.getElementById('<?= $id ?>');
+            if (!wrap || wrap.dataset.init) return;
+            wrap.dataset.init = '1';
+            var ta = wrap.querySelector('.h5p-eta-input');
+            var key = wrap.dataset.storageKey;
+            try { var saved = localStorage.getItem(key); if (saved !== null) ta.value = saved; } catch (e) {}
+            ta.addEventListener('input', function() {
+                try { localStorage.setItem(key, ta.value); } catch (e) {}
+            });
+        })();
+        </script>
+        <?php
+        return ob_get_clean();
+    }
+
     private function renderH5pGeneric(string $machineName, array $content, array $files): string {
         ob_start();
         ?>

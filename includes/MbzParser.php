@@ -13,34 +13,55 @@ class MbzParser {
     private array $sections = [];
     private array $questions = [];
     
+    /** Callback (percent, label) pour la barre de progression de l'éditeur */
+    private $progressCb = null;
+
     public function __construct(string $mbzPath, string $extractPath) {
         $this->mbzPath = $mbzPath;
         $this->extractPath = $extractPath;
     }
-    
+
+    public function setProgressCallback(callable $cb): void {
+        $this->progressCb = $cb;
+    }
+
+    private function progress(float $percent, string $label): void {
+        if ($this->progressCb) {
+            ($this->progressCb)($percent, $label);
+        }
+    }
+
     /**
-     * Extrait et parse le fichier MBZ complet
+     * Extrait et parse le fichier MBZ complet.
+     * Les pourcentages couvrent 0-70 % : l'appelant garde la fin pour la copie des
+     * fichiers et la conversion au format éditeur.
      */
     public function parse(): array {
         // Extraction du tar.gz
+        $this->progress(5, 'Décompression de l\'archive…');
         $this->extract();
-        
+
         // Parse les métadonnées
+        $this->progress(25, 'Lecture des informations du cours…');
         $this->parseBackupInfo();
-        
+
         // Parse les fichiers
+        $this->progress(30, 'Inventaire des fichiers…');
         $this->parseFiles();
-        
+
         // Parse les sections
+        $this->progress(38, 'Lecture des sections…');
         $this->parseSections();
-        
+
         // Parse les activités
         $this->parseActivities();
-        
+
         // Parse les questions
+        $this->progress(65, 'Lecture des questions…');
         $this->parseQuestions();
-        
+
         // Construit la structure finale
+        $this->progress(70, 'Assemblage du cours…');
         return $this->buildCourseStructure();
     }
     
@@ -213,10 +234,17 @@ class MbzParser {
     private function parseActivities(): void {
         $activitiesDir = $this->extractPath . '/activities';
         if (!is_dir($activitiesDir)) return;
-        
-        foreach (scandir($activitiesDir) as $dir) {
-            if ($dir === '.' || $dir === '..') continue;
-            
+
+        // Les activités sont le gros du travail : on répartit 40 % → 65 %
+        $dossiers = array_values(array_diff(scandir($activitiesDir), ['.', '..']));
+        $total = count($dossiers);
+        $faites = 0;
+
+        foreach ($dossiers as $dir) {
+            $this->progress($total ? 40 + 25 * ($faites / $total) : 40,
+                            'Activité ' . ($faites + 1) . '/' . $total . '…');
+            $faites++;
+
             $parts = explode('_', $dir);
             $type = $parts[0];
             $moduleId = $parts[1] ?? null;

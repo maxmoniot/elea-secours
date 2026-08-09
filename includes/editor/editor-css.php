@@ -408,10 +408,24 @@ body {
 
 .tree-section-icon {
     font-size: 1rem;
-    transition: transform 0.2s;
 }
-.tree-section.collapsed .tree-section-icon {
+
+/* Chevron de repli : pointe vers le bas quand la section est ouverte, vers la droite quand
+   elle est repliée. La rotation portait par erreur sur l'icône dossier (📁), qui tournait
+   sans rien indiquer, pendant que le triangle restait figé. */
+.tree-collapse-btn {
+    line-height: 1;
+}
+.tree-caret {
+    display: inline-block;
+    transition: transform 0.15s ease;
+}
+.tree-section.collapsed .tree-caret {
     transform: rotate(-90deg);
+}
+/* Respecter le réglage système « moins d'animations » */
+@media (prefers-reduced-motion: reduce) {
+    .tree-caret { transition: none; }
 }
 
 .tree-section-name {
@@ -426,6 +440,20 @@ body {
     gap: 0.25rem;
 }
 .tree-section-header:hover .tree-section-actions {
+    opacity: 1;
+}
+/* Section repliée : garder le chevron visible même sans survol, sinon plus rien n'indique
+   qu'elle est fermée une fois la souris partie. Les autres boutons restent au survol. */
+.tree-section.collapsed .tree-section-actions {
+    opacity: 1;
+}
+.tree-section.collapsed .tree-section-actions .tree-action-btn:not(.tree-collapse-btn) {
+    opacity: 0;
+}
+.tree-section.collapsed .tree-section-header:hover .tree-section-actions .tree-action-btn {
+    opacity: 0.6;
+}
+.tree-section.collapsed .tree-section-header:hover .tree-section-actions .tree-action-btn:hover {
     opacity: 1;
 }
 
@@ -1329,33 +1357,41 @@ body {
     flex: 1;
 }
 
+/* Une seule ligne : les boutons ne se replient plus et ne se compriment pas.
+   PAS d'overflow ici : `overflow-x` force `overflow-y` à `auto` (règle CSS), ce qui rognait
+   les menus déroulants (Forme, Emoji, Accès rapide, Templates) qui débordent vers le bas. */
 .cp-editor-toolbar {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
+    gap: 0.25rem;
+    padding: 0.5rem 0.4rem;
     background: white;
     border-bottom: 1px solid var(--gray-200);
     flex-shrink: 0;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
 }
-
-.cp-toolbar-label {
-    font-size: 0.75rem;
-    color: var(--gray-500);
-    margin-right: 0.5rem;
+.cp-editor-toolbar > * {
+    flex: 0 0 auto;
+}
+/* Les 15 boutons libellés demandent ~1265px ; avec le volet de structure (350px) il faut
+   donc une fenêtre d'environ 1640px. En dessous, on ne garde que les icônes (le libellé
+   passe en info-bulle) plutôt que de repartir sur deux lignes. */
+@media (max-width: 1650px) {
+    .cp-editor-toolbar .cp-toolbar-btn-label { display: none; }
+    .cp-editor-toolbar .cp-toolbar-btn { padding: 0.3rem 0.4rem; }
 }
 
 .cp-toolbar-btn {
     display: flex;
     align-items: center;
-    gap: 0.35rem;
-    padding: 0.4rem 0.7rem;
+    gap: 0.25rem;
+    padding: 0.3rem 0.45rem;
     background: var(--gray-50);
     border: 1px solid var(--gray-300);
     border-radius: 6px;
     color: var(--gray-700);
-    font-size: 0.8rem;
+    font-size: 0.74rem;
+    white-space: nowrap;
     cursor: pointer;
     transition: all 0.2s;
 }
@@ -1374,7 +1410,7 @@ body {
     background: linear-gradient(135deg, #fff3e0, #fce4ec);
 }
 .cp-toolbar-btn-icon {
-    font-size: 1rem;
+    font-size: 0.9rem;
 }
 
 .cp-canvas-container {
@@ -2457,6 +2493,372 @@ body {
     font-size: 1.56rem;
 }
 
+/* ============ ÉDITEUR REMETTRE DANS L'ORDRE (H5P.ImageSequencing) ============ */
+.seq-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.seq-card {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem;
+    border: 1px solid var(--gray-200, #e5e7eb);
+    border-radius: 8px;
+    background: var(--bg-secondary, #fff);
+}
+.seq-card-num {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    line-height: 22px;
+    text-align: center;
+    border-radius: 50%;
+    background: var(--primary, #6d28d9);
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+.seq-card-thumb {
+    flex: 0 0 auto;
+    width: 56px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-tertiary, #f3f4f6);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.seq-card-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.seq-card-noimg { font-size: 0.62rem; color: var(--gray-400, #9ca3af); text-align: center; }
+.seq-card-label { flex: 1 1 auto; min-width: 0; font-size: 0.82rem; }
+.seq-card-actions { flex: 0 0 auto; display: flex; gap: 2px; align-items: center; }
+
+/* ====== ÉDITEUR TROUVER LES ZONES (H5P.ImageMultipleHotspotQuestion) ====== */
+.fmh-canvas-wrap { overflow: auto; max-height: 60vh; }
+.fmh-canvas {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+    cursor: crosshair;
+    line-height: 0;
+}
+.fmh-canvas img { display: block; max-width: 100%; height: auto; user-select: none; }
+.fmh-zone {
+    position: absolute;
+    border: 2px solid #2e7d32;
+    background: rgba(76, 175, 80, 0.25);
+    border-radius: 50%;
+    cursor: move;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+.fmh-zone.rect { border-radius: 4px; }
+.fmh-zone.fausse { border-color: #c2185b; background: rgba(233, 30, 99, 0.22); }
+.fmh-zone-num {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #1b5e20;
+    pointer-events: none;
+}
+.fmh-zone.fausse .fmh-zone-num { color: #880e4f; }
+.fmh-zone-poignee {
+    position: absolute;
+    right: -5px;
+    bottom: -5px;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    background: #fff;
+    border: 2px solid #2e7d32;
+    cursor: nwse-resize;
+}
+.fmh-zone.fausse .fmh-zone-poignee { border-color: #c2185b; }
+.fmh-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.6rem;
+    flex-wrap: wrap;
+}
+.fmh-hint { font-size: 0.75rem; color: var(--gray-500, #6b7280); }
+.fmh-vide {
+    display: block;
+    padding: 2.5rem 1rem;
+    text-align: center;
+    border: 2px dashed var(--gray-300, #d1d5db);
+    border-radius: 12px;
+    background: var(--gray-50, #f8f9fa);
+    color: var(--gray-500, #6b7280);
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+.fmh-vide:hover { border-color: var(--primary, #6d28d9); }
+.fmh-liste { display: flex; flex-direction: column; gap: 0.4rem; }
+.fmh-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--gray-200, #e5e7eb);
+    border-left: 4px solid #2e7d32;
+    border-radius: 8px;
+    background: var(--bg-secondary, #fff);
+}
+.fmh-item.fausse { border-left-color: #c2185b; }
+.fmh-item-num {
+    flex: 0 0 auto;
+    width: 22px; height: 22px; line-height: 22px;
+    text-align: center; border-radius: 50%;
+    background: var(--primary, #6d28d9); color: #fff;
+    font-size: 0.72rem; font-weight: 700;
+}
+.fmh-item-champs { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.fmh-item-champs .cp-prop-input { font-size: 0.8rem; }
+.fmh-item-forme { flex: 0 0 auto; width: 110px; font-size: 0.8rem; }
+
+/* ============ ÉDITEUR MEMORY (H5P.MemoryGame) ============ */
+/* Une ligne = une PAIRE : image de gauche, image jumelle de droite (vide = la même). */
+.memo-pairs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.memo-pair {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem;
+    border: 1px solid var(--gray-200, #e5e7eb);
+    border-radius: 8px;
+    background: var(--bg-secondary, #fff);
+}
+.memo-pair-num {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    line-height: 22px;
+    text-align: center;
+    border-radius: 50%;
+    background: var(--primary, #6d28d9);
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+.memo-pair-imgs {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+.memo-pair-link { font-size: 0.8rem; color: var(--gray-400, #9ca3af); }
+.memo-thumb {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-tertiary, #f3f4f6);
+    border: 1px solid var(--gray-200, #e5e7eb);
+    border-radius: 6px;
+    overflow: hidden;
+    cursor: pointer;
+}
+.memo-thumb:hover { border-color: var(--primary, #6d28d9); }
+.memo-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.memo-thumb-mirror { opacity: 0.45; }
+.memo-thumb-empty { font-size: 0.62rem; color: var(--gray-400, #9ca3af); text-align: center; }
+.memo-thumb-qmark { font-size: 1.6rem; font-weight: 700; line-height: 1; }
+.memo-pair-fields {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+.memo-pair-fields .cp-prop-input { font-size: 0.8rem; }
+.memo-pair-actions { flex: 0 0 auto; display: flex; gap: 2px; align-items: center; }
+.memo-look {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    align-items: flex-start;
+}
+.memo-look-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary, #4b5563);
+}
+.memo-look-item input[type="color"] {
+    width: 56px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--gray-300, #d1d5db);
+    border-radius: 6px;
+    background: none;
+    cursor: pointer;
+}
+.memo-back-slot { display: flex; align-items: center; gap: 0.3rem; }
+
+/* ==================== ÉDITEUR CARTE À EXPLORER (H5P.GameMap) ==================== */
+/* cp-mode rend le wrapper transparent : la carte reprend son propre fond.
+   var(--bg-secondary) n'existe qu'en thème sombre → le clair garde le blanc d'origine. */
+.gm-card {
+    background: var(--bg-secondary, white);
+    color: var(--text-primary, inherit);
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    overflow-y: auto;
+}
+.gm-editor {
+    display: flex;
+    gap: 1rem;
+    padding: 1rem;
+    align-items: flex-start;
+    /* Sans width, la carte de l'éditeur se réduit à la largeur naturelle de l'image */
+    width: 100%;
+    box-sizing: border-box;
+}
+.gm-editor-main { flex: 1 1 auto; min-width: 0; }
+.gm-editor-side {
+    flex: 0 0 300px;
+    background: var(--gray-50, #f8f9fa);
+    border: 1px solid var(--gray-200, #e5e7eb);
+    border-radius: 10px;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+.gm-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+}
+.gm-toolbar-hint { font-size: 0.72rem; color: var(--gray-500, #6b7280); }
+.gm-empty {
+    background: var(--gray-50, #f8f9fa);
+    border: 2px dashed var(--gray-300, #d1d5db);
+    border-radius: 12px;
+    padding: 3rem;
+    text-align: center;
+}
+.gm-map {
+    position: relative;
+    border-radius: 10px;
+    overflow: hidden;
+    user-select: none;
+}
+.gm-map-bg { width: 100%; display: block; }
+.gm-map-paths {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+}
+.gm-map-stages { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+.gm-stage {
+    position: absolute;
+    padding: 0;
+    background: rgba(250, 223, 10, 0.85);
+    color: #333;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    z-index: 10;
+}
+.gm-stage.start { background: rgba(0, 130, 0, 0.85); color: #fff; }
+.gm-stage.finish { background: rgba(153, 0, 0, 0.85); color: #fff; }
+.gm-stage.selected {
+    border-color: var(--primary, #6d28d9);
+    box-shadow: 0 0 0 3px rgba(109, 40, 217, 0.35);
+    z-index: 12;
+}
+.gm-stage-num { font-size: 0.7rem; font-weight: 700; line-height: 1; }
+.gm-stage-label {
+    position: absolute;
+    top: 105%;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    font-size: 0.65rem;
+    background: rgba(0,0,0,0.7);
+    color: #fff;
+    padding: 1px 5px;
+    border-radius: 3px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.gm-stage:hover .gm-stage-label,
+.gm-stage.selected .gm-stage-label { opacity: 1; }
+.gm-props { padding: 0.75rem; }
+.gm-props-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+    color: var(--gray-700, #374151);
+}
+.gm-neighbor {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+    padding: 2px 0;
+    cursor: pointer;
+}
+.gm-answer {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-bottom: 0.3rem;
+}
+.gm-answer .cp-prop-input { flex: 1; font-size: 0.78rem; }
+
+/* Zone de saisie libre (H5P.ExportableTextArea)
+   Calqué sur .h5p-eta du lecteur (view.php) : padding 8px + 2px de bordure d'élément
+   = les 0.378em du lecteur. Garder les deux synchronisés. */
+.cp-eta-element {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
+    width: 100%;
+    height: 100%;
+    padding: 8px;
+    box-sizing: border-box;
+    font-size: inherit;
+    color: #333;
+}
+.cp-eta-label {
+    line-height: 1.5;
+}
+.cp-eta-label p { margin: 0 0 0.5em 0; }
+.cp-eta-label p:last-child { margin-bottom: 0; }
+.cp-eta-input {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 3.4em;
+    box-sizing: border-box;
+    background: #fff;
+    border: 2px solid #ccd3f0;
+    border-radius: 0.5em;
+}
+
 /* Options dans le panneau propriétés */
 /* Blanks rich text editor */
 .cp-blanks-richtext-wrap {
@@ -3315,6 +3717,36 @@ body {
     border-radius: 4px;
     font-size: 0.9rem;
 }
+
+/* Réponse de QCM : zone éditable HTML (elle peut contenir une image, comme dans Éléa) */
+.qs-answer-rich {
+    min-height: 2.1rem;
+    max-height: 220px;
+    overflow-y: auto;
+    outline: none;
+    background: var(--bg-secondary, #fff);
+    color: var(--text-primary, inherit);
+}
+.qs-answer-rich:focus { border-color: var(--primary, #6d28d9); }
+.qs-answer-rich p { margin: 0; }
+.qs-answer-rich img {
+    max-width: 100%;
+    vertical-align: middle;
+    border-radius: 4px;
+}
+.qs-answer-rich:empty::before {
+    content: attr(data-placeholder);
+    color: var(--gray-400, #9ca3af);
+}
+.quiz-answer-img {
+    padding: 0.25rem 0.4rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    flex-shrink: 0;
+    opacity: 0.65;
+}
+.quiz-answer-img:hover { opacity: 1; }
 
 .quiz-answer-delete {
     padding: 0.25rem 0.5rem;

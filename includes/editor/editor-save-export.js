@@ -111,27 +111,214 @@ function regenerateEditorSessionId() {
 
 // ==================== OVERLAY DE CHARGEMENT ====================
 
-function showLoadingOverlay(title, subtitle) {
+/**
+ * Voile d'attente. Avec `withProgress`, affiche une vraie barre alimentée par
+ * setLoadingProgress() / watchServerProgress() au lieu du seul rond qui tourne :
+ * sur un gros cours l'import et l'export durent longtemps et semblaient bloqués.
+ */
+var _loadingCancelFn = null;
+
+/**
+ * Voile d'attente. Avec `withProgress`, affiche une vraie barre alimentée par
+ * setLoadingProgress() / watchServerProgress() au lieu du seul rond qui tourne :
+ * sur un gros cours l'import et l'export durent longtemps et semblaient bloqués.
+ * `onCancel` ajoute une croix + un bouton « Annuler » (et la touche Échap).
+ */
+function showLoadingOverlay(title, subtitle, withProgress, onCancel) {
     let overlay = document.getElementById('editorLoadingOverlay');
     if (!overlay) {
         overlay = document.createElement('div');
         overlay.id = 'editorLoadingOverlay';
         document.body.appendChild(overlay);
     }
+    _loadingCancelFn = (typeof onCancel === 'function') ? onCancel : null;
     overlay.innerHTML = `
         <div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;">
-            <div style="background:white;border-radius:16px;padding:2rem 3rem;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-width:400px;">
-                <div class="spinner" style="margin:0 auto 1rem;"></div>
+            <div style="position:relative;background:var(--bg-secondary,white);border-radius:16px;padding:2rem 3rem;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-width:420px;min-width:320px;">
+                ${_loadingCancelFn ? `
+                <button id="editorLoadingCloseBtn" onclick="cancelLoadingOverlay()" title="Annuler (Échap)"
+                        style="position:absolute;top:0.6rem;right:0.6rem;width:1.8rem;height:1.8rem;border-radius:50%;border:1px solid var(--gray-300,#d1d5db);background:var(--bg-secondary,#fff);color:var(--gray-600,#4b5563);font-size:0.9rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;">✕</button>` : ''}
+                ${withProgress ? '' : '<div class="spinner" style="margin:0 auto 1rem;"></div>'}
                 <p style="font-size:1rem;color:var(--gray-700);margin:0;">${title || 'Chargement...'}</p>
                 ${subtitle ? '<p style="font-size:0.85rem;color:var(--gray-400);margin-top:0.5rem;word-break:break-word;">' + subtitle + '</p>' : ''}
+                ${withProgress ? `
+                <div style="margin-top:1.1rem;">
+                    <div style="height:10px;background:var(--gray-200,#e5e7eb);border-radius:999px;overflow:hidden;">
+                        <div id="editorProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,#6d28d9,#8b5cf6);border-radius:999px;transition:width 0.35s ease;"></div>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;gap:1rem;margin-top:0.45rem;">
+                        <span id="editorProgressLabel" style="font-size:0.78rem;color:var(--gray-500);text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Démarrage…</span>
+                        <span id="editorProgressPercent" style="font-size:0.78rem;color:var(--gray-500);font-variant-numeric:tabular-nums;">0 %</span>
+                    </div>
+                </div>` : ''}
+                ${_loadingCancelFn ? `
+                <button onclick="cancelLoadingOverlay()"
+                        style="margin-top:1.25rem;padding:0.45rem 1.1rem;background:var(--gray-100,#f1f5f9);border:1px solid var(--gray-300,#cbd5e1);border-radius:6px;color:var(--gray-600,#475569);font-size:0.85rem;cursor:pointer;">Annuler</button>` : ''}
             </div>
         </div>`;
     overlay.style.display = 'block';
+    _loadingPercent = 0;
+    document.addEventListener('keydown', _loadingEscapeHandler);
+}
+
+function _loadingEscapeHandler(e) {
+    if (e.key === 'Escape' && _loadingCancelFn) {
+        e.preventDefault();
+        cancelLoadingOverlay();
+    }
+}
+
+/** Déclenche l'annulation en cours (croix, bouton, ou Échap). */
+function cancelLoadingOverlay() {
+    const fn = _loadingCancelFn;
+    _loadingCancelFn = null;   // une seule fois
+    hideLoadingOverlay();
+    if (fn) fn();
+}
+
+var _loadingPercent = 0;
+
+/**
+ * Met la barre à jour. La progression ne recule jamais : entre l'envoi du fichier et les
+ * étapes serveur, une barre qui repart en arrière donne l'impression d'un plantage.
+ */
+function setLoadingProgress(percent, label) {
+    if (typeof percent === 'number' && !isNaN(percent)) {
+        percent = Math.max(0, Math.min(100, percent));
+        if (percent < _loadingPercent) percent = _loadingPercent;
+        _loadingPercent = percent;
+        const bar = document.getElementById('editorProgressBar');
+        const pct = document.getElementById('editorProgressPercent');
+        if (bar) bar.style.width = percent + '%';
+        if (pct) pct.textContent = Math.round(percent) + ' %';
+    }
+    if (label) {
+        const el = document.getElementById('editorProgressLabel');
+        if (el) el.textContent = label;
+    }
+}
+
+var _progressWatchTimer = null;
+
+/**
+ * Interroge l'avancement publié par la tâche serveur.
+ * `from`/`to` remappent les 0-100 % du serveur sur une portion de la barre, quand une
+ * phase navigateur (l'envoi du fichier) occupe déjà le début.
+ */
+function watchServerProgress(progressId, from, to) {
+    stopServerProgress();
+    from = (typeof from === 'number') ? from : 0;
+    to = (typeof to === 'number') ? to : 100;
+    _progressWatchTimer = setInterval(function() {
+        fetch('api/editor_api.php?action=get_progress&id=' + encodeURIComponent(progressId), { cache: 'no-store' })
+            .then(function(r) { return r.json(); })
+            .then(function(p) {
+                if (!p || p.percent === null || p.percent === undefined) return;
+                setLoadingProgress(from + (to - from) * (p.percent / 100), p.label);
+            })
+            .catch(function() { /* un sondage raté ne doit pas casser la tâche */ });
+    }, 400);
+}
+
+function stopServerProgress() {
+    if (_progressWatchTimer) {
+        clearInterval(_progressWatchTimer);
+        _progressWatchTimer = null;
+    }
+}
+
+function newProgressId() {
+    return 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+/**
+ * POST d'un FormData en XHR plutôt qu'en fetch : seul XHR expose l'avancement de l'ENVOI,
+ * et sur un .mbz de plusieurs dizaines de Mo c'est une bonne part de l'attente.
+ * `onUpload(fraction)` reçoit 0→1 pendant le transfert.
+ */
+function postFormWithProgress(formData, onUpload) {
+    var xhr = new XMLHttpRequest();
+    var promesse = new Promise(function(resolve, reject) {
+        xhr.open('POST', 'api/editor_api.php');
+        if (xhr.upload && onUpload) {
+            xhr.upload.onprogress = function(e) {
+                if (e.lengthComputable) onUpload(e.loaded / e.total);
+            };
+        }
+        xhr.onload = function() {
+            if (xhr.status < 200 || xhr.status >= 300) {
+                reject(new Error('Erreur serveur : HTTP ' + xhr.status));
+                return;
+            }
+            try { resolve(JSON.parse(xhr.responseText)); }
+            catch (e) { reject(new Error('Réponse serveur invalide')); }
+        };
+        xhr.onerror = function() { reject(new Error('Erreur réseau')); };
+        // Abandon volontaire : marqué pour que l'appelant n'affiche pas d'erreur
+        xhr.onabort = function() {
+            var err = new Error('Chargement annulé');
+            err.annule = true;
+            reject(err);
+        };
+        xhr.send(formData);
+    });
+    promesse.abort = function() { try { xhr.abort(); } catch (e) {} };
+    return promesse;
 }
 
 function hideLoadingOverlay() {
+    stopServerProgress();
+    _loadingCancelFn = null;
+    document.removeEventListener('keydown', _loadingEscapeHandler);
     const overlay = document.getElementById('editorLoadingOverlay');
     if (overlay) overlay.style.display = 'none';
+}
+
+// ==================== ANNULATION D'UN CHARGEMENT ====================
+
+/**
+ * Photographie l'état de l'éditeur avant un chargement, pour pouvoir y revenir si
+ * l'utilisateur annule : soit un éditeur vide, soit le cours précédemment ouvert.
+ */
+function snapshotEditorState() {
+    return {
+        courseData: JSON.parse(JSON.stringify(courseData)),
+        sectionId: (typeof selectedSection !== 'undefined') ? selectedSection : null,
+        activityId: (typeof selectedActivity !== 'undefined') ? selectedActivity : null,
+        sessionId: getEditorSessionId()
+    };
+}
+
+function restoreEditorState(snap, message) {
+    if (!snap) return;
+    courseData = JSON.parse(JSON.stringify(snap.courseData));
+    selectedSection = snap.sectionId;
+    selectedActivity = snap.activityId;
+
+    // Remettre l'identifiant de session de l'éditeur : les URLs des médias du cours
+    // restauré pointent vers SON dossier, pas vers celui du chargement abandonné.
+    try { localStorage.setItem('elea_editor_session_id', snap.sessionId); } catch (e) {}
+    if (typeof EditorDriveSync !== 'undefined' && EditorDriveSync.reset) {
+        EditorDriveSync.reset();
+        EditorDriveSync.init(snap.sessionId);
+    }
+
+    const nameInput = document.getElementById('courseName');
+    if (nameInput) nameInput.value = courseData.name || '';
+
+    renderTree();
+    renderProperties();
+    if ((courseData.sections || []).length && typeof showStructureView === 'function') {
+        showStructureView();
+    } else {
+        const vide = document.getElementById('emptyCanvas');
+        const contenu = document.getElementById('editorContent');
+        if (vide) vide.style.display = 'flex';
+        if (contenu) contenu.style.display = 'none';
+    }
+    if (typeof cpInvalidateAllThumbs === 'function') cpInvalidateAllThumbs();
+    if (typeof calculateCourseSize === 'function') calculateCourseSize();
+    if (message !== null) showToast(message || 'Chargement annulé', 'info');
 }
 
 /**
@@ -191,7 +378,12 @@ function autoSaveDraft() {
                 q.sourceWidth = tempAct.content.sourceWidth;
                 q.drags = tempAct.content.drags || [];
                 q.drops = tempAct.content.drops || [];
-                q.questiontext = tempAct.content.questiontext || q.questiontext;
+                // Même précaution qu'à la fermeture : l'éditeur glisser affiche un énoncé
+                // par défaut, ne pas l'imposer à une question qui n'en avait pas.
+                var enonceEdite = tempAct.content.questiontext || '';
+                if (enonceEdite !== (tempAct._enonceOuverture || '')) {
+                    q.questiontext = enonceEdite || q.questiontext;
+                }
                 q.shuffleanswers = tempAct.content.shuffleanswers;
             }
         }
@@ -426,36 +618,66 @@ function loadMbzFile() {
     }
     
     const fileName = file.name.replace(/\.mbz$/i, '');
-    showLoadingOverlay('Ouverture du parcours...', fileName);
-    
-    // Cleanup l'ancienne session avant d'ouvrir un nouveau cours
-    var oldSessionId = getEditorSessionId();
-    fetch('api/editor_api.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'cleanup_editor_session', sessionId: oldSessionId })
-    })
-    .then(function() {
-        // Nouveau session
-        var newId = regenerateEditorSessionId();
-        EditorDriveSync.reset();
-        EditorDriveSync.init(newId);
-        
-        const formData = new FormData();
-        formData.append('action', 'parse_mbz');
-        formData.append('file', file);
-        formData.append('session_id', newId);
-        
-        return fetch('api/editor_api.php', {
+    const etatPrecedent = snapshotEditorState();
+    const oldSessionId = etatPrecedent.sessionId;
+    var progressId = newProgressId();
+    var annule = false;
+    var requete = null;
+
+    // L'ancienne session n'est PLUS supprimée d'entrée : on lit d'abord le nouveau cours
+    // dans une session neuve, et on ne jette l'ancienne qu'une fois la lecture réussie.
+    // Sinon une annulation — ou un simple échec de lecture — laissait l'éditeur avec un
+    // cours dont tous les fichiers venaient d'être effacés.
+    var newId = regenerateEditorSessionId();
+    EditorDriveSync.reset();
+    EditorDriveSync.init(newId);
+
+    function annulerOuverture() {
+        annule = true;
+        if (requete && requete.abort) requete.abort();
+        stopServerProgress();
+        // Jeter la session du chargement abandonné, revenir à la précédente
+        fetch('api/editor_api.php', {
             method: 'POST',
-            body: formData
-        });
-    })
-    .then(r => r.json())
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'cleanup_editor_session', sessionId: newId })
+        }).catch(function() {});
+        restoreEditorState(etatPrecedent);
+    }
+
+    showLoadingOverlay('Ouverture du parcours...', fileName, true, annulerOuverture);
+    setLoadingProgress(0, 'Envoi du fichier…');
+
+    const formData = new FormData();
+    formData.append('action', 'parse_mbz');
+    formData.append('file', file);
+    formData.append('session_id', newId);
+    formData.append('progressId', progressId);
+
+    // 0-35 % : envoi du fichier (mesuré) ; 35-100 % : traitement serveur (sondé)
+    requete = postFormWithProgress(formData, function(fraction) {
+        if (annule) return;
+        setLoadingProgress(fraction * 35, 'Envoi du fichier… ' + Math.round(fraction * 100) + ' %');
+        if (fraction >= 1) {
+            setLoadingProgress(35, 'Lecture du cours…');
+            watchServerProgress(progressId, 35, 100);
+        }
+    });
+
+    requete
     .then(data => {
+        if (annule) return;
+        stopServerProgress();
         hideLoadingOverlay();
-        
+
         if (data.success && data.course) {
+            // Lecture réussie : on peut libérer l'ancienne session sans risque
+            fetch('api/editor_api.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'cleanup_editor_session', sessionId: oldSessionId })
+            }).catch(function() {});
+
             data.course.name = fileName.replace(/[-_]+/g, ' ');
             data.course.shortname = file.name.replace(/\.mbz$/i, '');
             loadParsedCourse(data.course);
@@ -466,7 +688,10 @@ function loadMbzFile() {
         }
     })
     .catch(err => {
+        if (annule || err.annule) return;
         hideLoadingOverlay();
+        // La lecture a échoué : rendre l'éditeur tel qu'il était, l'ancienne session est intacte
+        restoreEditorState(etatPrecedent, null);
         showToast('Erreur: ' + err.message, 'error');
     });
 }
@@ -586,6 +811,44 @@ function loadParsedCourse(parsedCourse) {
  * Les anciens cours contiennent des vidéos simples (H5P.Video) dans les CoursePresentation
  * On les convertit en InteractiveVideo pour compatibilité avec l'éditeur et l'export
  */
+/**
+ * Convertit UN élément H5P.Video en H5P.InteractiveVideo, sur place.
+ * Renvoie true si l'élément a été converti (false s'il ne s'agit pas d'une vidéo simple).
+ *
+ * Idempotent : un élément déjà en InteractiveVideo est ignoré. C'est ce qui permet de
+ * l'appeler aussi au moment du rendu, en filet de sécurité — le rendu CoursePresentation
+ * ne sait afficher QUE 'interactivevideo' : un 'video' non converti tombait dans le
+ * `default:` du switch et s'affichait comme une simple étiquette grise, sans lecteur.
+ */
+function convertVideoElementToIV(element) {
+    var lib = (element && element.action && element.action.library) || '';
+    if (!lib.startsWith('H5P.Video ')) return false;
+
+    var sources = (element.action.params && element.action.params.sources) || [];
+
+    element.action.library = 'H5P.InteractiveVideo 1.27';
+    element.action.params = {
+        interactiveVideo: {
+            video: {
+                startScreenOptions: { title: '', hideStartTitle: true },
+                textTracks: { videoTrack: [] },
+                files: sources.map(function(s) {
+                    return {
+                        path: s.path || '',
+                        mime: s.mime || 'video/mp4',
+                        copyright: s.copyright || { license: 'U' }
+                    };
+                })
+            },
+            assets: { interactions: [], endScreens: [] }
+        }
+    };
+    if (element.action.metadata) {
+        element.action.metadata.contentType = 'Interactive Video';
+    }
+    return true;
+}
+
 function convertH5pVideoToInteractiveVideo() {
     if (!courseData || !courseData.sections) return;
     var converted = 0;
@@ -596,33 +859,7 @@ function convertH5pVideoToInteractiveVideo() {
             if (!slides) return;
             slides.forEach(function(slide) {
                 (slide.elements || []).forEach(function(element) {
-                    var lib = (element.action && element.action.library) || '';
-                    if (!lib.startsWith('H5P.Video ')) return;
-                    
-                    var sources = (element.action.params && element.action.params.sources) || [];
-                    
-                    // Convertir en InteractiveVideo
-                    element.action.library = 'H5P.InteractiveVideo 1.27';
-                    element.action.params = {
-                        interactiveVideo: {
-                            video: {
-                                startScreenOptions: { title: '', hideStartTitle: true },
-                                textTracks: { videoTrack: [] },
-                                files: sources.map(function(s) {
-                                    return {
-                                        path: s.path || '',
-                                        mime: s.mime || 'video/mp4',
-                                        copyright: s.copyright || { license: 'U' }
-                                    };
-                                })
-                            },
-                            assets: { interactions: [], endScreens: [] }
-                        }
-                    };
-                    if (element.action.metadata) {
-                        element.action.metadata.contentType = 'Interactive Video';
-                    }
-                    converted++;
+                    if (convertVideoElementToIV(element)) converted++;
                 });
             });
         });
@@ -688,9 +925,26 @@ function exportElea() {
         EditorDriveSync.pauseFlush();
     }
     
-    showLoadingOverlay('Export Éléa en cours...', courseData.name || 'cours');
+    var _exportProgressId = newProgressId();
+    var _exportAnnule = false;
+    var _exportAbort = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+
+    // L'export ne modifie pas le cours : annuler consiste à cesser d'attendre. Le serveur
+    // finit son travail dans son coin, l'archive produite sera nettoyée avec le cache.
+    function annulerExport() {
+        _exportAnnule = true;
+        stopServerProgress();
+        if (_exportAbort) _exportAbort.abort();
+        if (typeof EditorDriveSync !== 'undefined' && EditorDriveSync.resumeFlush) {
+            EditorDriveSync.resumeFlush();
+        }
+        showToast('Export annulé', 'info');
+    }
+
+    showLoadingOverlay('Export Éléa en cours...', courseData.name || 'cours', true, annulerExport);
+    setLoadingProgress(0, 'Analyse du cours…');
     courseData.name = document.getElementById('courseName').value;
-    
+
     var _exportStart = Date.now();
     var _exportTimer = setInterval(function() {
         console.log('[Export] En cours...', Math.round((Date.now() - _exportStart) / 1000) + 's');
@@ -726,15 +980,19 @@ function exportElea() {
     })
     .catch(function(e) { console.warn('[Export] Diagnostic échoué (pas grave):', e.message); })
     .then(function() {
-        // Phase 2 : Export réel
+        if (_exportAnnule) return null;
+        // Phase 2 : Export réel — la barre suit l'avancement publié par l'exporteur
         console.log('[Export] Lancement export...');
+        watchServerProgress(_exportProgressId, 0, 100);
         return fetch('api/editor_api.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'export_elea', data: courseData, sessionId: getEditorSessionId() })
+            body: JSON.stringify({ action: 'export_elea', data: courseData, sessionId: getEditorSessionId(), progressId: _exportProgressId }),
+            signal: _exportAbort ? _exportAbort.signal : undefined
         });
     })
     .then(function(r) {
+        if (_exportAnnule || !r) return null;
         console.log('[Export] HTTP', r.status, r.statusText);
         if (!r.ok) {
             return r.text().then(function(t) { 
@@ -750,6 +1008,9 @@ function exportElea() {
     })
     .then(function(data) {
         clearInterval(_exportTimer);
+        if (_exportAnnule || !data) return;
+        stopServerProgress();
+        setLoadingProgress(100, 'Terminé');
         console.log('[Export] Réponse reçue en', Math.round((Date.now() - _exportStart) / 1000) + 's');
         hideLoadingOverlay();
         if (data.success && data.downloadUrl) {
@@ -773,7 +1034,23 @@ function exportElea() {
             iframe.src = data.downloadUrl;
             document.body.appendChild(iframe);
             setTimeout(function() { try { document.body.removeChild(iframe); } catch(e) {} }, 30000);
-            showToast('Export Éléa terminé !', 'success');
+            // Prévenir si des activités n'ont pas pu être traduites : sans ce message elles
+            // disparaîtraient du .mbz sans que le professeur le sache.
+            var ecartees = data.droppedActivities || [];
+            // Médias référencés mais introuvables partout au moment de l'export : le .mbz
+            // est incomplet pour eux — à signaler AVANT que le prof importe sur Éléa.
+            var manquants = data.unresolvedFiles || [];
+            if (manquants.length) {
+                console.error('[Export] Médias introuvables, .mbz incomplet :', manquants);
+                showToast('⚠️ Export terminé mais ' + manquants.length + ' média(s) INTROUVABLE(S) — le .mbz est incomplet ('
+                          + manquants.slice(0, 3).join(', ') + (manquants.length > 3 ? '…' : '') + ')', 'error');
+            }
+            if (ecartees.length) {
+                showToast('Export terminé, mais ' + ecartees.length + ' activité(s) non exportable(s) ont été retirées : '
+                          + ecartees.map(function(a) { return a.name; }).join(', '), 'error');
+            } else if (!manquants.length) {
+                showToast('Export Éléa terminé !', 'success');
+            }
             // Reprendre la flush loop Drive
             if (typeof EditorDriveSync !== 'undefined' && EditorDriveSync.resumeFlush) {
                 EditorDriveSync.resumeFlush();
@@ -784,6 +1061,8 @@ function exportElea() {
     })
     .catch(function(err) {
         clearInterval(_exportTimer);
+        // Abandon volontaire : annulerExport() a déjà tout remis en ordre
+        if (_exportAnnule || err.name === 'AbortError') return;
         console.error('[Export] ERREUR après', Math.round((Date.now() - _exportStart) / 1000) + 's:', err.message);
         hideLoadingOverlay();
         // Reprendre la flush loop Drive même en cas d'erreur

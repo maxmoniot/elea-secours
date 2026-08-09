@@ -65,6 +65,10 @@ function renderDdimageortextEditor(activity) {
     var isInQuiz = (typeof _qsDdiEditIdx !== 'undefined' && _qsDdiEditIdx !== null);
     var backLabel = isInQuiz ? '← Retour à l\'évaluation' : '← Retour';
     var backAction = isInQuiz ? 'qsCloseDdiEditor()' : 'showStructureView()';
+    // Depuis une évaluation, le titre affiché ici est celui de la QUESTION : le clic doit
+    // donc renommer la question, pas l'évaluation (startEditActivityNameInHeader travaille
+    // sur l'activité sélectionnée, c'est-à-dire l'évaluation elle-même).
+    var titleAction = isInQuiz ? 'qsStartEditTitleFromDdi(this)' : 'startEditActivityNameInHeader(this)';
     
     // Rich text questiontext
     var questionHtml = c.questiontext || '';
@@ -73,7 +77,7 @@ function renderDdimageortextEditor(activity) {
         <div class="ddi-editor">
             <div class="ddi-header-compact">
                 <button class="btn btn-secondary ed-back-btn" onclick="${backAction}">${backLabel}</button>
-                <h3 class="ed-title">🎯 <span class="activity-name-editable" onclick="startEditActivityNameInHeader(this)">${escapeHtml(activity.name)}</span></h3>
+                <h3 class="ed-title">🎯 <span class="activity-name-editable" onclick="${titleAction}">${escapeHtml(activity.name)}</span></h3>
                 <div class="ed-header-actions">
                     <button class="ed-undo-btn" onclick="courseUndo()" title="Annuler (Ctrl+Z)" ${courseHistoryIndex > 0 ? '' : 'disabled'}>↩</button>
                     <button class="ed-redo-btn" onclick="courseRedo()" title="Répéter (Ctrl+Y)" ${courseHistoryIndex < courseHistory.length - 1 ? '' : 'disabled'}>↪</button>
@@ -1556,6 +1560,7 @@ function ddiProcessFlowchartResult(result, imageData, srcCanvas) {
                         ddiUploadBlobsSequential(blobItems, function(labelUrls) {
                             ddiApplyExtraction({
                                 source_size: { w: w, h: h },
+                                version: result._version,
                                 background_url: bgUrl,
                                 maxBlockSize: { w: labelSize.w, h: labelSize.h },
                                 pad: 0,
@@ -1613,7 +1618,23 @@ function ddiProcessBlocksResult(result, imageData, srcCanvas) {
     var bgCtx = bgCanvas.getContext('2d');
     bgCtx.fillStyle = '#ffffff'; bgCtx.fillRect(0, 0, w, h);
     
-    if (containerBlocks.length > 0) {
+    if (manifest.source === 'scratch') {
+        // Scratch n'a pas de bloc « conteneur » : les instructions s'empilent sans
+        // enveloppe. Sans ce cas, containerBlocks était vide, rien n'était dessiné et
+        // le fond restait entièrement BLANC — l'espace de travail disparaissait.
+        // On garde donc l'image d'origine et on efface seulement l'emplacement des
+        // pièces à replacer (blanc, comme les trous des captures MakeCode).
+        bgCtx.drawImage(srcCanvas, 0, 0);
+        var scratchImageData = bgCtx.getImageData(0, 0, w, h);
+        var sData = scratchImageData.data;
+        var trou = extractionMasqueFondScratch(actionBlocks, blockMasks, rgba, w, h);
+        for (var sIdx = 0; sIdx < w * h; sIdx++) {
+            if (!trou[sIdx]) continue;
+            var so = sIdx * 4;
+            sData[so] = 255; sData[so + 1] = 255; sData[so + 2] = 255; sData[so + 3] = 255;
+        }
+        bgCtx.putImageData(scratchImageData, 0, 0);
+    } else if (containerBlocks.length > 0) {
         var actionMask = new Uint8Array(w * h);
         for (var ai = 0; ai < actionBlocks.length; ai++) {
             var aMask = blockMasks[actionBlocks[ai].id];
@@ -1621,7 +1642,7 @@ function ddiProcessBlocksResult(result, imageData, srcCanvas) {
                 if (aMask[idx]) actionMask[idx] = 1;
             }
         }
-        
+
         var containerImageData = bgCtx.getImageData(0, 0, w, h);
         var cData = containerImageData.data;
         for (var ci = 0; ci < containerBlocks.length; ci++) {
@@ -1702,6 +1723,7 @@ function ddiProcessBlocksResult(result, imageData, srcCanvas) {
                             if (failCount > 0) console.warn('[DDI] ' + failCount + '/' + blockUrls.length + ' block uploads failed');
                             ddiApplyExtraction({
                                 source_size: { w: w, h: h },
+                                version: result._version,
                                 background_url: bgUrl,
                                 maxBlockSize: { w: maxBlockW, h: maxBlockH },
                                 pad: PAD,
@@ -1800,7 +1822,7 @@ function ddiApplyExtraction(data) {
             if (blocksLoaded >= blocksToLoad) {
                 ddiRefreshAll(); onCourseModified();
                 if (statusEl) statusEl.innerHTML = '<div style="color:#2e7d32; font-size: 0.7rem;">✓ ' + actionBlocks.length + ' blocs extraits</div>';
-                showToast(actionBlocks.length + ' blocs extraits et configurés', 'success');
+                showToast(actionBlocks.length + ' blocs extraits et configurés (' + (data.version || '?') + ')', 'success');
             }
         };
         img.onerror = function() {
@@ -1812,7 +1834,7 @@ function ddiApplyExtraction(data) {
             if (blocksLoaded >= blocksToLoad) {
                 ddiRefreshAll(); onCourseModified();
                 if (statusEl) statusEl.innerHTML = '<div style="color:#2e7d32; font-size: 0.7rem;">✓ ' + actionBlocks.length + ' blocs extraits</div>';
-                showToast(actionBlocks.length + ' blocs extraits', 'success');
+                showToast(actionBlocks.length + ' blocs extraits (' + (data.version || '?') + ')', 'success');
             }
         };
         img.src = block.url;

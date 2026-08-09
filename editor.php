@@ -89,7 +89,10 @@ cleanupPdfPreviews();
                 <div id="editorLoadingBar" style="width:0%;height:100%;background:linear-gradient(90deg,#6366f1,#8b5cf6);border-radius:4px;transition:width 0.3s ease;"></div>
             </div>
             <div id="editorLoadingText" style="font-size:0.8rem;color:#94a3b8;">Recherche d'un brouillon...</div>
-            <button id="editorLoadingNewBtn" onclick="editorLoadingCancel()" style="margin-top:1.25rem;padding:0.5rem 1.25rem;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:6px;color:#475569;font-size:0.85rem;cursor:pointer;transition:background 0.2s;">📄 Nouveau cours</button>
+            <div style="display:flex;gap:0.5rem;justify-content:center;margin-top:1.25rem;">
+                <button id="editorLoadingAbortBtn" onclick="editorLoadingAbort()" style="padding:0.5rem 1.1rem;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:6px;color:#475569;font-size:0.85rem;cursor:pointer;">✕ Annuler</button>
+                <button id="editorLoadingNewBtn" onclick="editorLoadingCancel()" style="padding:0.5rem 1.1rem;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:6px;color:#475569;font-size:0.85rem;cursor:pointer;transition:background 0.2s;">📄 Nouveau cours</button>
+            </div>
         </div>
     </div>
     <script>
@@ -102,6 +105,34 @@ cleanupPdfPreviews();
             if (ov) ov.style.display = 'flex';
         }
     })();
+    /**
+     * Abandonner la restauration du brouillon SANS rien supprimer : l'éditeur reste vide et
+     * le brouillon pourra être repris plus tard. À ne pas confondre avec « Nouveau cours »,
+     * qui lui efface le brouillon et ses fichiers.
+     */
+    function editorLoadingAbort() {
+        window._editorLoadCancelled = true;
+        var ov = document.getElementById('editorLoadingOverlay');
+        if (ov) ov.style.display = 'none';
+
+        // Vider l'éditeur explicitement : la réponse du serveur a pu arriver juste avant le
+        // clic et déjà remplir le cours. On ne touche NI au brouillon NI aux fichiers — ils
+        // reviendront au prochain chargement de la page.
+        courseData = { id: generateId(), name: 'Nouveau cours', shortname: 'cours1', sections: [] };
+        var champNom = document.getElementById('courseName');
+        if (champNom) champNom.value = courseData.name;
+        selectedSection = null;
+        selectedActivity = null;
+        if (typeof renderTree === 'function') renderTree();
+        if (typeof renderProperties === 'function') renderProperties();
+        var vide = document.getElementById('emptyCanvas');
+        var contenu = document.getElementById('editorContent');
+        if (vide) vide.style.display = 'flex';
+        if (contenu) contenu.style.display = 'none';
+        if (typeof calculateCourseSize === 'function') calculateCourseSize();
+        if (typeof showToast === 'function') showToast('Restauration annulée — le brouillon est conservé, rechargez la page pour le reprendre', 'info');
+    }
+
     function editorLoadingCancel() {
         if (!confirm('Créer un nouveau cours ?\n\nLe brouillon en cours de chargement et tous ses fichiers (images, vidéos) seront supprimés du serveur et du Drive.\n\nCette action est irréversible.')) {
             return;
@@ -317,6 +348,26 @@ cleanupPdfPreviews();
                         <div class="activity-type-name">Cartes Dialogue</div>
                         <div class="activity-type-desc">Cartes retournables Q/R</div>
                     </div>
+                    <div class="activity-type-card" onclick="selectActivityType(this)" data-type="imagesequencing">
+                        <div class="activity-type-icon">🔢</div>
+                        <div class="activity-type-name">Remettre dans l'ordre</div>
+                        <div class="activity-type-desc">Images à replacer dans le bon ordre</div>
+                    </div>
+                    <div class="activity-type-card" onclick="selectActivityType(this)" data-type="memorygame">
+                        <div class="activity-type-icon">🧠</div>
+                        <div class="activity-type-name">Memory</div>
+                        <div class="activity-type-desc">Retrouver les paires de cartes</div>
+                    </div>
+                    <div class="activity-type-card" onclick="selectActivityType(this)" data-type="multihotspot">
+                        <div class="activity-type-icon">🔎</div>
+                        <div class="activity-type-name">Trouver les zones</div>
+                        <div class="activity-type-desc">Cliquer les endroits à repérer sur une image</div>
+                    </div>
+                    <div class="activity-type-card" onclick="selectActivityType(this)" data-type="gamemap">
+                        <div class="activity-type-icon">🧭</div>
+                        <div class="activity-type-name">Carte à explorer</div>
+                        <div class="activity-type-desc">Étapes reliées sur une carte</div>
+                    </div>
                     <div class="activity-type-card" onclick="selectActivityType(this)" data-type="threeimage">
                         <div class="activity-type-icon">🌐</div>
                         <div class="activity-type-name">Visite virtuelle 360</div>
@@ -460,6 +511,14 @@ cleanupPdfPreviews();
 <?php include __DIR__ . '/includes/editor/editor-save-export.js'; ?>
 
 <?php include __DIR__ . '/includes/editor/editor-three-image.js'; ?>
+
+<?php include __DIR__ . '/includes/editor/editor-gamemap.js'; ?>
+
+<?php include __DIR__ . '/includes/editor/editor-imagesequencing.js'; ?>
+
+<?php include __DIR__ . '/includes/editor/editor-memorygame.js'; ?>
+
+<?php include __DIR__ . '/includes/editor/editor-multihotspot.js'; ?>
 
 <?php include __DIR__ . '/includes/editor/editor-import.js'; ?>
 
@@ -611,41 +670,53 @@ cleanupPdfPreviews();
     // Charger un cours pour édition (depuis le visualiseur)
     function loadCourseForEditing(info) {
         showToast('Chargement du cours "' + info.name + '"...', 'info');
-        
-        // Afficher un indicateur de chargement
-        const emptyCanvas = document.getElementById('emptyCanvas');
-        if (emptyCanvas) {
-            emptyCanvas.innerHTML = `
-                <div style="text-align: center;">
-                    <div class="spinner" style="width: 50px; height: 50px; border-width: 4px; margin: 0 auto 1rem;"></div>
-                    <h3>Chargement du cours...</h3>
-                    <p style="color: var(--gray-500);">${escapeHtml(info.name)}</p>
-                </div>
-            `;
-        }
-        
+
         let apiData;
-        
+        var progressId = (typeof newProgressId === 'function') ? newProgressId() : '';
+
         if (info.type === 'gdrive' && info.gdriveId) {
-            apiData = { action: 'parse_drive_mbz', gdrive_id: info.gdriveId, sessionId: getEditorSessionId() };
+            apiData = { action: 'parse_drive_mbz', gdrive_id: info.gdriveId, sessionId: getEditorSessionId(), progressId: progressId };
         } else if (info.type === 'editor_session' && info.sessionId) {
             apiData = { action: 'load_editor_session_draft', sessionId: info.sessionId };
         } else if (info.localId) {
-            apiData = { action: 'parse_local_course', course_id: info.localId, sessionId: getEditorSessionId() };
+            apiData = { action: 'parse_local_course', course_id: info.localId, sessionId: getEditorSessionId(), progressId: progressId };
         } else {
             showToast('Impossible de charger ce cours', 'error');
             renderTree();
             renderProperties();
             return;
         }
-        
+
+        // Voile avec barre et bouton d'annulation : ce chargement peut durer longtemps.
+        var etatPrecedent = snapshotEditorState();
+        var annule = false;
+        var controleur = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+
+        // Barre seulement si le serveur publie son avancement pour cette action ;
+        // sinon rond qui tourne, mais avec le bouton d'annulation dans les deux cas.
+        var avecBarre = !!apiData.progressId;
+        showLoadingOverlay('Chargement du cours...', info.name, avecBarre, function() {
+            annule = true;
+            stopServerProgress();
+            if (controleur) controleur.abort();
+            restoreEditorState(etatPrecedent);
+        });
+        if (avecBarre) {
+            setLoadingProgress(0, 'Lecture du cours…');
+            watchServerProgress(progressId, 0, 100);
+        }
+
         fetch('api/editor_api.php', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(apiData)
+            body: JSON.stringify(apiData),
+            signal: controleur ? controleur.signal : undefined
         })
         .then(r => r.json())
         .then(data => {
+            if (annule) return;
+            stopServerProgress();
+            hideLoadingOverlay();
             if (data.success && data.course) {
                 // Utiliser le nom connu si le cours parsé n'en a pas
                 if (!data.course.name && info.name) {
@@ -660,10 +731,12 @@ cleanupPdfPreviews();
             }
         })
         .catch(err => {
+            if (annule || err.name === 'AbortError') return;
+            stopServerProgress();
+            hideLoadingOverlay();
             console.error('Erreur:', err);
+            restoreEditorState(etatPrecedent, null);
             showToast('Erreur: ' + err.message, 'error');
-            renderTree();
-            renderProperties();
         });
     }
     

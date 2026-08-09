@@ -430,6 +430,156 @@ foreach ($sections as $sIndex => $section) {
         font-size: 0.95rem;
     }
     
+    /* Remise en ordre d'images : ordre attendu, numéroté (corrigé papier) */
+    .h5p-is-print {
+        margin: 0.75rem 0;
+    }
+
+    .h5p-is-print-task {
+        margin-bottom: 0.75rem;
+        font-weight: 500;
+    }
+
+    .h5p-is-print-cards {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+    }
+
+    .h5p-is-print-card {
+        position: relative;
+        width: 130px;
+        border: 1px solid #d0d0e0;
+        border-radius: 6px;
+        padding: 0.4rem;
+        text-align: center;
+        page-break-inside: avoid;
+    }
+
+    .h5p-is-print-card img {
+        width: 100%;
+        height: auto;
+    }
+
+    .h5p-is-print-num {
+        position: absolute;
+        top: 4px;
+        left: 4px;
+        background: #5b21b6;
+        color: white;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        line-height: 20px;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+
+    .h5p-is-print-label {
+        font-size: 0.8rem;
+        margin-top: 0.25rem;
+    }
+
+    /* Trouver les zones : l'image avec les bonnes zones entourées (corrigé papier) */
+    .h5p-fmh-print {
+        margin: 0.75rem 0;
+        page-break-inside: avoid;
+    }
+
+    .h5p-fmh-print-image {
+        position: relative;
+        display: inline-block;
+        max-width: 100%;
+    }
+
+    .h5p-fmh-print-image img {
+        display: block;
+        max-width: 100%;
+        height: auto;
+    }
+
+    .h5p-fmh-print-zone {
+        position: absolute;
+        border: 2px solid #2e7d32;
+        border-radius: 50%;
+    }
+
+    .h5p-fmh-print-zone.rect {
+        border-radius: 3px;
+    }
+
+    .h5p-fmh-print-note {
+        font-size: 0.8rem;
+        color: #555;
+        margin-top: 0.25rem;
+    }
+
+    /* Memory : les paires à retrouver, numérotées (corrigé papier) */
+    .h5p-memo-print {
+        margin: 0.75rem 0;
+    }
+
+    .h5p-memo-print-pairs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+    }
+
+    .h5p-memo-print-pair {
+        position: relative;
+        width: 170px;
+        border: 1px solid #d0d0e0;
+        border-radius: 6px;
+        padding: 0.4rem 0.4rem 0.4rem 1.75rem;
+        page-break-inside: avoid;
+    }
+
+    .h5p-memo-print-imgs {
+        display: flex;
+        gap: 0.35rem;
+    }
+
+    .h5p-memo-print-imgs img {
+        width: 50%;
+        height: auto;
+        border: 1px solid #e5e5ef;
+    }
+
+    .h5p-memo-print-num {
+        position: absolute;
+        top: 4px;
+        left: 4px;
+        background: #5b21b6;
+        color: white;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        line-height: 20px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-align: center;
+    }
+
+    .h5p-memo-print-desc {
+        font-size: 0.8rem;
+        margin-top: 0.25rem;
+    }
+
+    /* Zone de saisie libre : la consigne puis des lignes vierges à remplir au stylo */
+    .h5p-eta-print {
+        margin: 0.75rem 0;
+    }
+
+    .h5p-eta-print-label {
+        margin-bottom: 0.5rem;
+    }
+
+    .h5p-eta-print-lines span {
+        display: block;
+        border-bottom: 1px solid #b0b0c0;
+        height: 1.6rem;
+    }
+
     .h5p-options-print {
         list-style: none;
         padding: 0;

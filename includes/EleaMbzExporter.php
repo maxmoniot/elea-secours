@@ -43,6 +43,9 @@ class EleaMbzExporter {
     private $editorSessionId = '';
     private $_driveManager = null; // Singleton DriveManager pour l'export
     private $exportLogs = []; // Log messages for browser console
+    private $droppedActivities = []; // Activités non exportables écartées (voir dropUnsupportedActivities)
+    private $unresolvedFiles = []; // Fichiers référencés introuvables partout (nom => true) — signalés au prof
+    private $progressCb = null;      // Callback d'avancement (barre de progression du navigateur)
     
     public function __construct($data, string $sessionId = '') {
         $this->data = $data;
@@ -65,6 +68,20 @@ class EleaMbzExporter {
         return $this->filesManifest;
     }
     
+    /**
+     * Reçoit une fonction (percent, label) appelée au fil de l'export, pour alimenter
+     * la barre de progression affichée dans l'éditeur.
+     */
+    public function setProgressCallback(callable $cb): void {
+        $this->progressCb = $cb;
+    }
+
+    private function progress(float $percent, string $label): void {
+        if ($this->progressCb) {
+            ($this->progressCb)($percent, $label);
+        }
+    }
+
     public function getExportLogs(): array {
         return $this->exportLogs;
     }
@@ -172,8 +189,35 @@ class EleaMbzExporter {
                 }
             }
         }
-        
+
+        // 11. Le nom peut être mappé sur Drive par une AUTRE session que celle de
+        // l'export (brouillon repris dans une nouvelle session, cours ré-importé) :
+        // chercher dans les metadata de toutes les sessions actives.
+        require_once __DIR__ . '/EditorDriveSync.php';
+        $anyId = \EditorDriveSync::findDriveIdAnySession($cleanFilename);
+        if ($anyId) {
+            $resolved = \EditorDriveSync::resolveFileByDriveId($anyId, $cleanFilename);
+            if ($resolved && file_exists($resolved)) {
+                $this->logExport("[findFileMultiPath] $cleanFilename résolu via le mapping d'une autre session ($anyId)");
+                return $resolved;
+            }
+        }
+
+        // Introuvable PARTOUT : mémorisé pour être signalé au professeur à la fin de
+        // l'export — sans ça, l'URL brute restait incrustée dans le .mbz et l'activité
+        // perdait ce média en silence (constaté le 07/08/2026 : 7 médias perdus).
+        $this->unresolvedFiles[$cleanFilename] = true;
+        error_log("EleaMbzExporter: fichier référencé INTROUVABLE partout : $cleanFilename — le .mbz sera incomplet");
+
         return null;
+    }
+
+    /**
+     * Fichiers référencés par le cours mais introuvables partout au moment de l'export
+     * (le .mbz est incomplet pour ces médias). À afficher au professeur.
+     */
+    public function getUnresolvedFiles(): array {
+        return array_keys($this->unresolvedFiles);
     }
     
     
@@ -184,7 +228,12 @@ class EleaMbzExporter {
         };
         
         $logP('export() start');
-        
+        $this->progress(2, 'Préparation de l\'export…');
+
+        // Écarter les activités qu'on ne sait pas exporter, AVANT toute génération : les
+        // séquences de sections et moodle_backup.xml sont numérotées sur cette même liste.
+        $this->dropUnsupportedActivities();
+
         // Créer le dossier d'export
         $exportId = 'elea_' . time() . '_' . bin2hex(random_bytes(4));
         $this->exportDir = CACHE_DIR . '/exports/' . $exportId;
@@ -197,6 +246,7 @@ class EleaMbzExporter {
         mkdir($this->filesDir, 0777, true);
         
         // Pré-télécharger les fichiers Drive en parallèle (curl_multi)
+        $this->progress(4, 'Récupération des fichiers du Drive…');
         $this->prefetchDriveFiles();
         
         // Log prefetch result
@@ -211,24 +261,65 @@ class EleaMbzExporter {
         
         // Générer la structure complète Moodle/Éléa
         $logP('generateCompleteBackup start');
+        $this->progress(12, 'Construction du cours…');
         $this->generateCompleteBackup();
         $logP('generateCompleteBackup done, manifest=' . count($this->filesManifest));
-        
+
         // Créer le fichier .ARCHIVE_INDEX
+        $this->progress(90, 'Index de l\'archive…');
         $this->generateArchiveIndex();
-        
+
         // Créer l'archive tar.gz
         $mbzPath = CACHE_DIR . '/exports/' . $this->sanitizeFilename($this->data['name'] ?? 'cours') . '-' . date('Ymd-His') . '.mbz';
         $logP('creating tar.gz');
+        $this->progress(92, 'Compression de l\'archive…');
         $this->createTarGz($mbzPath);
         $logP('tar.gz done: ' . (file_exists($mbzPath) ? round(filesize($mbzPath)/1024) . 'Ko' : 'MISSING'));
-        
+
         // Nettoyer le dossier temporaire
+        $this->progress(99, 'Finalisation…');
         $this->deleteDirectory($this->exportDir);
-        
+
         return $mbzPath;
     }
     
+    /**
+     * Retire les activités dont le contenu n'est pas un arbre H5P (ex. les pages Moodle,
+     * dont le contenu est du HTML). Sans ce filtre elles arrivaient dans generateH5pActivity
+     * et faisaient planter la totalité de l'export.
+     * Retourne la liste des activités écartées.
+     */
+    private function dropUnsupportedActivities(): array {
+        $dropped = [];
+        $handled = ['mapmodules' => 1, 'assign' => 1, 'resource' => 1, 'quiz' => 1];
+
+        foreach ($this->data['sections'] ?? [] as $sIdx => $section) {
+            $kept = [];
+            foreach ($section['activities'] ?? [] as $activity) {
+                $type = $activity['type'] ?? 'h5pactivity';
+                $content = $activity['content'] ?? null;
+                if (!isset($handled[$type]) && $content !== null && !is_array($content)) {
+                    $name = $activity['name'] ?? '?';
+                    $dropped[] = ['type' => $type, 'name' => $name];
+                    $this->logExport("Activité écartée de l'export (type « $type » non pris en charge) : $name");
+                    error_log("EleaMbzExporter: activité écartée (type $type non pris en charge) : $name");
+                    continue;
+                }
+                $kept[] = $activity;
+            }
+            $this->data['sections'][$sIdx]['activities'] = $kept;
+        }
+        $this->droppedActivities = $dropped;
+        return $dropped;
+    }
+
+    /**
+     * Activités écartées par dropUnsupportedActivities() lors du dernier export.
+     */
+    public function getDroppedActivities(): array {
+        return $this->droppedActivities;
+    }
+
     /**
      * Pré-télécharge tous les fichiers Drive référencés en parallèle (curl_multi).
      * Remplit le cache drive_downloads/ pour que processFilePath les trouve instantanément.
@@ -299,12 +390,33 @@ class EleaMbzExporter {
             @mkdir($tmpDir, 0755, true);
         }
         
-        // Télécharger tous les fichiers Drive référencés
+        // Télécharger tous les fichiers Drive référencés.
+        // AVEC LE JETON OAUTH (api Drive alt=media), pas via lh3.googleusercontent.com :
+        // cette URL publique ne sert que des IMAGES et seulement si le fichier est public.
+        // Nos fichiers sont privés → elle renvoyait une page HTML ou une erreur pour une
+        // grande partie du lot (constaté le 07/08/2026 : 184 fichiers récupérés sur 288),
+        // et tous les médias manquants sortaient absents du .mbz.
+        $accessToken = null;
+        try {
+            require_once ROOT_PATH . '/DriveManager.php';
+            if (!$this->_driveManager) {
+                $this->_driveManager = new \DriveManager(
+                    DRIVE_OAUTH_CLIENT_JSON, GDRIVE_OAUTH_TOKEN_PATH, ROOT_PATH . '/vendor/autoload.php'
+                );
+            }
+            $accessToken = $this->_driveManager->getAccessTokenString();
+        } catch (\Throwable $e) {
+            error_log('EleaMbzExporter: jeton Drive indisponible pour le prefetch: ' . $e->getMessage());
+        }
+
         $toDownload = [];
         foreach (array_keys($driveIds) as $driveId) {
-            $toDownload[$driveId] = 'https://lh3.googleusercontent.com/d/' . $driveId;
+            $toDownload[$driveId] = $accessToken
+                ? 'https://www.googleapis.com/drive/v3/files/' . $driveId . '?alt=media&supportsAllDrives=true'
+                : 'https://lh3.googleusercontent.com/d/' . $driveId;
         }
-        
+        $enteteAuth = $accessToken ? ['Authorization: Bearer ' . $accessToken] : [];
+
         if (empty($toDownload)) return;
         
         error_log("EleaMbzExporter: prefetch " . count($toDownload) . " fichiers Drive (curl_multi)");
@@ -333,6 +445,7 @@ class EleaMbzExporter {
                     CURLOPT_TIMEOUT => 30,
                     CURLOPT_SSL_VERIFYPEER => false,
                     CURLOPT_USERAGENT => 'Mozilla/5.0',
+                    CURLOPT_HTTPHEADER => $enteteAuth,
                 ]);
                 curl_multi_add_handle($mh, $ch);
                 $handles[$driveId] = $ch;
@@ -350,7 +463,12 @@ class EleaMbzExporter {
                 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
                 curl_multi_remove_handle($mh, $ch);
                 
-                if ($data && strlen($data) > 100 && $httpCode >= 200 && $httpCode < 400) {
+                // Rejeter les pages HTML d'erreur Google (fichier privé → lh3 renvoie parfois
+                // du HTML en 200) : les mettre en cache ferait embarquer du HTML à la place
+                // du média dans le .mbz. Le téléchargement OAuth par fichier prendra le relais.
+                $debut = ltrim(substr($data ?: '', 0, 64));
+                $estHtml = (stripos($debut, '<!doctype') === 0 || stripos($debut, '<html') === 0);
+                if ($data && strlen($data) > 100 && $httpCode >= 200 && $httpCode < 400 && !$estHtml) {
                     $cachePath = $tmpDir . '/' . $driveId . '_prefetch.bin';
                     file_put_contents($cachePath, $data);
                     $downloaded++;
@@ -361,8 +479,33 @@ class EleaMbzExporter {
             @file_put_contents($progressLog, date('H:i:s') . " batch $batchNum done, total downloaded: $downloaded\n", FILE_APPEND | LOCK_EX);
         }
         
+        // Rattrapage : tout ce que le lot parallèle n'a pas ramené est retenté un par un
+        // en OAuth. C'est lent mais ça ne concerne que les échecs, et un média manquant
+        // ici = un média absent du .mbz livré au professeur.
+        $rattrapes = 0; $echecs = [];
+        foreach (array_keys($toDownload) as $driveId) {
+            if (file_exists($tmpDir . '/' . $driveId . '_prefetch.bin')) continue;
+            $contenu = null;
+            try {
+                if ($this->_driveManager) $contenu = $this->_driveManager->getFileContentById($driveId);
+            } catch (\Throwable $e) {
+                $contenu = null;
+            }
+            if ($contenu !== null && strlen($contenu) > 100) {
+                file_put_contents($tmpDir . '/' . $driveId . '_prefetch.bin', $contenu);
+                $downloaded++; $rattrapes++;
+            } else {
+                $echecs[] = $driveId;
+            }
+        }
+
         error_log("EleaMbzExporter: prefetch terminé, $downloaded/" . count($toDownload) . " fichiers");
-        $this->logExport("[prefetch] Downloaded $downloaded/" . count($toDownload) . " fichiers Drive");
+        $this->logExport("[prefetch] Downloaded $downloaded/" . count($toDownload) . " fichiers Drive"
+            . ($rattrapes ? " (dont $rattrapes rattrapés en OAuth)" : '')
+            . ($echecs ? " — ÉCHECS: " . implode(', ', array_slice($echecs, 0, 10)) : ''));
+        if ($echecs) {
+            error_log("EleaMbzExporter: " . count($echecs) . " fichiers Drive NON téléchargés : " . implode(', ', array_slice($echecs, 0, 20)));
+        }
     }
     
     private function generateCompleteBackup() {
@@ -387,14 +530,16 @@ class EleaMbzExporter {
         $this->generateActivities();
         
         // 5. questions.xml (après les activités pour avoir toutes les questions)
+        $this->progress(82, 'Banque de questions…');
         $this->generateQuestionsXml();
-        
+
         // 5b. Mettre à jour les inforef avec les question_categoryref
         $this->updateInforefsWithQuestionCategories();
-        
+
         // 5. files.xml (après les activités pour avoir tous les fichiers)
+        $this->progress(86, 'Inventaire des fichiers…');
         $this->generateFilesXml();
-        
+
         // 6. Log de backup
         $this->generateBackupLog();
     }
@@ -1439,13 +1584,25 @@ class EleaMbzExporter {
     
     private function generateActivities() {
         mkdir($this->exportDir . '/activities', 0777, true);
-        
+
+        // Les activités représentent l'essentiel du temps d'export : on répartit 15 % → 80 %
+        $totalActivites = 0;
+        foreach ($this->data['sections'] ?? [] as $s) {
+            $totalActivites += count($s['activities'] ?? []);
+        }
+        $faites = 0;
+
         $activityId = 1;
         foreach ($this->data['sections'] ?? [] as $sIdx => $section) {
             $sectionId = ($sIdx + 1) * 1000;
-            
+
             foreach ($section['activities'] ?? [] as $activity) {
                 $activityType = $activity['type'] ?? 'h5pactivity';
+                $this->progress(
+                    $totalActivites ? 15 + 65 * ($faites / $totalActivites) : 15,
+                    'Activité ' . ($faites + 1) . '/' . $totalActivites . ' — ' . ($activity['name'] ?? '')
+                );
+                $faites++;
                 
                 // Calculer la visibilité (section + activité)
                 $sectionVis = (isset($section['visible']) && $section['visible'] === false) ? false : true;
@@ -1813,7 +1970,10 @@ class EleaMbzExporter {
         if (!empty($intro)) {
             $self = $this;
             $introXml = preg_replace_callback(
-                '/(?:api\/editor_api\.php\?action=serve_upload&amp;file=|api\/editor_api\.php\?action=serve_upload&file=)([^\"\x27<>\s&]+)/',
+                // Tolère un param session AVANT ou APRÈS file= (URLs stampées par le parse,
+                // _healLh3Urls ou loadEditorSessionDraft) et le CONSOMME pour qu'il ne
+                // reste pas incrusté dans le HTML après remplacement.
+                '/api\/editor_api\.php\?action=serve_upload(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?&(?:amp;)?file=([^\"\x27<>\s&]+)(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?/',
                 function($m) use ($self, $contextId) {
                     $encodedName = $m[1];
                     $localFile = $self->findFileMultiPath(urldecode($encodedName));
@@ -2173,7 +2333,9 @@ class EleaMbzExporter {
         if (!empty($intro)) {
             $self = $this;
             $introXml = preg_replace_callback(
-                '/(?:api\/editor_api\.php\?action=serve_upload&amp;file=|api\/editor_api\.php\?action=serve_upload&file=)([^"\x27<>\s&]+)/',
+                // Tolère un param session AVANT ou APRÈS file= et le consomme (cf. l'autre
+                // site identique plus haut).
+                '/api\/editor_api\.php\?action=serve_upload(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?&(?:amp;)?file=([^"\x27<>\s&]+)(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?/',
                 function($m) use ($self, $contextId, &$fileIds) {
                     $encodedName = $m[1];
                     $localFile = $self->findFileMultiPath(urldecode($encodedName));
@@ -2362,6 +2524,10 @@ class EleaMbzExporter {
             'QuestionSet'        => ['major' => 1, 'minor' => 20],
             'ThreeImage'         => ['major' => 0, 'minor' => 5],
             'MultiMediaChoice'   => ['major' => 0, 'minor' => 3],
+            'GameMap'            => ['major' => 1, 'minor' => 2],
+            'ImageSequencing'    => ['major' => 1, 'minor' => 1],
+            'MemoryGame'         => ['major' => 1, 'minor' => 3],
+            'ImageMultipleHotspotQuestion' => ['major' => 1, 'minor' => 0],
         ];
         $version = $h5pVersions[$h5pType] ?? ['major' => 1, 'minor' => 0];
         
@@ -2378,7 +2544,7 @@ class EleaMbzExporter {
     <machine_name>' . $machineName . '</machine_name>
     <major_version>' . $version['major'] . '</major_version>
     <minor_version>' . $version['minor'] . '</minor_version>
-    <intro></intro>
+    <intro>' . $this->xmlEncode($activity['intro'] ?? '') . '</intro>
     <introformat>1</introformat>
     <json_content>' . $this->xmlEncodeJson($jsonContent) . '</json_content>
     <embed_type>div</embed_type>
@@ -3241,10 +3407,28 @@ class EleaMbzExporter {
         $questionFileIds = [];
         if (!empty($q['questionimage']['path'])) {
             $imgPath = $q['questionimage']['path'];
-            // Extraire le nom de fichier depuis l'URL
-            $imgFilename = basename(parse_url($imgPath, PHP_URL_PATH));
+            // Extraire le nom de fichier depuis l'URL.
+            // ⚠️ Une image ajoutée dans l'éditeur a pour chemin
+            //    « api/editor_api.php?action=serve_upload&file=upload_….jpg&session=… ».
+            //    basename(parse_url(PHP_URL_PATH)) rendait « editor_api.php » : le fichier
+            //    n'était JAMAIS trouvé, le bloc entier était sauté et l'image disparaissait
+            //    du .mbz SANS message — d'où « l'image de la question a disparu » à la
+            //    réouverture. Le nom vit dans le paramètre `file`.
+            $imgFilename = '';
+            if (preg_match('#[?&]file=([^&]+)#', $imgPath, $mf)) {
+                $imgFilename = basename(urldecode($mf[1]));
+            }
+            if ($imgFilename === '' || $imgFilename === 'editor_api.php') {
+                $imgFilename = basename(parse_url($imgPath, PHP_URL_PATH) ?: $imgPath);
+            }
             $localPath = $this->findFileMultiPath($imgFilename);
-            
+
+            if (!$localPath || !file_exists($localPath)) {
+                $this->unresolvedFiles[$imgFilename] = true;
+                $this->logExport("Image de question introuvable, non embarquée : $imgFilename");
+                error_log("EleaMbzExporter: image de question INTROUVABLE : $imgFilename");
+            }
+
             if ($localPath && file_exists($localPath)) {
                 $fileContent = file_get_contents($localPath);
                 $contenthash = sha1($fileContent);
@@ -3313,19 +3497,16 @@ class EleaMbzExporter {
         // Traiter les images inline dans le questiontext (img src= avec URLs éditeur)
         $questionText = $this->processQuestionTextInlineImages($questionText, $contextId, $questionId, $questionFileIds);
         
-        // Stocker les fileIds pour les inforef des questions
-        if (!empty($questionFileIds)) {
-            $this->questionFileIds = array_merge($this->questionFileIds ?? [], $questionFileIds);
-        }
-        
         // Construire le XML spécifique au type
+        // (AVANT le stockage des fileIds : buildMultichoiceQuestionXml embarque les images
+        //  des réponses et ajoute ses propres entrées à $questionFileIds)
         $answersXml = '';
         $pluginXml = '';
         $penalty = '0.3333333';
-        
+
         switch ($qtype) {
             case 'multichoice':
-                $pluginXml = $this->buildMultichoiceQuestionXml($q, $questionId);
+                $pluginXml = $this->buildMultichoiceQuestionXml($q, $questionId, $contextId, $questionFileIds);
                 break;
             case 'truefalse':
                 $pluginXml = $this->buildTrueFalseQuestionXml($q, $questionId);
@@ -3341,7 +3522,12 @@ class EleaMbzExporter {
                 $pluginXml = $this->buildDdimageortextQuestionXml($q, $questionId);
                 break;
         }
-        
+
+        // Stocker les fileIds pour les inforef des questions
+        if (!empty($questionFileIds)) {
+            $this->questionFileIds = array_merge($this->questionFileIds ?? [], $questionFileIds);
+        }
+
         $this->questionsBank[] = [
             'bankEntryId' => $bankEntryId,
             'contextId' => $contextId,
@@ -3361,8 +3547,9 @@ class EleaMbzExporter {
     /**
      * Génère le XML plugin pour une question multichoice
      */
-    private function buildMultichoiceQuestionXml($q, $questionId) {
+    private function buildMultichoiceQuestionXml($q, $questionId, $contextId = 0, &$questionFileIds = null) {
         $answers = $q['answers'] ?? [];
+        if ($questionFileIds === null) $questionFileIds = [];
         $single = ($q['single'] ?? true) ? 1 : 0;
         $shuffle = ($q['shuffleanswers'] ?? true) ? 1 : 0;
         
@@ -3385,6 +3572,11 @@ class EleaMbzExporter {
             $text = $ans['text'] ?? '';
             if (!empty($text) && strpos($text, '<') === false) {
                 $text = '<p>' . htmlspecialchars($text) . '</p>';
+            }
+            // Une réponse peut contenir une image : l'embarquer comme Éléa, en filearea
+            // « answer » avec l'id de la réponse comme itemid.
+            if (strpos($text, '<img') !== false) {
+                $text = $this->processQuestionTextInlineImages($text, $contextId, $aid, $questionFileIds, 'answer');
             }
             $answersXml .= '
                     <answer id="' . $aid . '">
@@ -3589,17 +3781,21 @@ class EleaMbzExporter {
     }
     
     /**
-     * Traite les images inline dans le questiontext HTML.
+     * Traite les images inline d'un HTML de question (énoncé OU réponse).
      * Trouve les <img src="..."> pointant vers des URLs éditeur (file_editor.php, cache/editor_uploads, etc.),
      * les copie dans l'archive MBZ, et remplace les src par @@PLUGINFILE@@/filename.
+     *
+     * $filearea vaut « questiontext » pour l'énoncé et « answer » pour une réponse, avec
+     * $itemId = l'id de la question ou l'id de la réponse — c'est exactement ce qu'écrit
+     * Éléa (vérifié sur un parcours réel : 30 fichiers en questiontext, 38 en answer).
      */
-    private function processQuestionTextInlineImages($questionText, $contextId, $questionId, &$questionFileIds) {
+    private function processQuestionTextInlineImages($questionText, $contextId, $questionId, &$questionFileIds, $filearea = 'questiontext') {
         if (empty($questionText)) return $questionText;
-        
+
         // Pattern: img tags avec src contenant des URLs d'éditeur
         $result = preg_replace_callback(
             '#<img\s([^>]*?)src=["\']([^"\']+)["\']([^>]*?)>#i',
-            function($matches) use ($contextId, $questionId, &$questionFileIds) {
+            function($matches) use ($contextId, $questionId, &$questionFileIds, $filearea) {
                 $beforeSrc = $matches[1];
                 $srcUrl = $matches[2];
                 $afterSrc = $matches[3];
@@ -3620,6 +3816,13 @@ class EleaMbzExporter {
                 // Résoudre le chemin local
                 $localPath = $this->resolveEditorUrl($srcUrl);
                 if (!$localPath || !file_exists($localPath)) {
+                    // Signaler au professeur : sans ça l'URL interne restait incrustée dans
+                    // le .mbz et l'image disparaissait silencieusement à la réouverture.
+                    $nom = basename(parse_url($srcUrl, PHP_URL_PATH) ?: $srcUrl);
+                    if (preg_match('#[?&]file=([^&]+)#', $srcUrl, $mf)) $nom = urldecode($mf[1]);
+                    $this->unresolvedFiles[$nom] = true;
+                    $this->logExport("Image de question introuvable, laissée telle quelle : $nom");
+                    error_log("EleaMbzExporter: image de question INTROUVABLE : $nom");
                     return $matches[0]; // Garder tel quel si non trouvé
                 }
                 
@@ -3649,7 +3852,7 @@ class EleaMbzExporter {
                     'contenthash' => $contenthash,
                     'contextid' => $contextId,
                     'component' => 'question',
-                    'filearea' => 'questiontext',
+                    'filearea' => $filearea,
                     'itemid' => $questionId,
                     'filepath' => '/',
                     'filename' => $imgFilename,
@@ -3665,7 +3868,7 @@ class EleaMbzExporter {
                     'contenthash' => 'da39a3ee5e6b4b0d3255bfef95601890afd80709',
                     'contextid' => $contextId,
                     'component' => 'question',
-                    'filearea' => 'questiontext',
+                    'filearea' => $filearea,
                     'itemid' => $questionId,
                     'filepath' => '/',
                     'filename' => '.',
@@ -4158,10 +4361,16 @@ class EleaMbzExporter {
                 }
                 return $originalPath;
             }
-            // Vérifier si c'est un fichier image/vidéo à embarquer (par extension)
+            // Une IMAGE désignée par une URL est embarquée : le cours reste autonome et
+            // c'est léger. Une VIDÉO, non : une capsule podeduc ou toute vidéo hébergée
+            // ailleurs doit rester un LIEN dans le .mbz — Éléa lit les URL externes
+            // nativement. La télécharger remplaçait l'URL saisie par le professeur par un
+            // mp4 embarqué (« mon URL devient une vidéo mp4 embed ») et gonflait l'archive.
+            // Les vidéos réellement déposées dans l'éditeur ne passent pas ici : leur
+            // chemin est un serve_upload, traité plus haut.
             $ext = strtolower(pathinfo(parse_url($path, PHP_URL_PATH) ?: '', PATHINFO_EXTENSION));
-            $mediaExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'mp4', 'webm'];
-            if (in_array($ext, $mediaExts)) {
+            $imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'];
+            if (in_array($ext, $imageExts)) {
                 $tmpFile = $this->downloadUrlToTemp($path, $ext);
                 if ($tmpFile) {
                     $newPath = $this->copyFileToArchive($tmpFile, 'url-image-' . bin2hex(random_bytes(4)) . '.' . $ext, $contextId, $hvpId, $activityFileIds);
@@ -4337,7 +4546,8 @@ class EleaMbzExporter {
         if (!is_array($content)) {
             return;
         }
-        static $mediaKeys = ['image' => 1, 'video' => 1, 'audio' => 1, 'file' => 1, 'files' => 1];
+        static $mediaKeys = ['image' => 1, 'video' => 1, 'audio' => 1, 'file' => 1, 'files' => 1,
+                             'backgroundImage' => 1];
         foreach ($content as $key => &$value) {
             if (isset($mediaKeys[$key]) && $value === null) {
                 unset($content[$key]);
@@ -4527,9 +4737,15 @@ class EleaMbzExporter {
      * 4. Supprime la propriété rotation (Éléa ne la supporte pas sur les images)
      */
     private function preprocessImageRotations(&$h5pContent, $contextId, $hvpId, &$activityFileIds) {
-        // Vérifier que c'est un Course Presentation avec des slides
-        $slides = &$h5pContent['presentation']['slides'] ?? null;
-        if (!$slides || !is_array($slides)) return;
+        // Vérifier que c'est un Course Presentation avec des slides.
+        // Le test précède la prise de référence : `&$h5pContent['presentation']['slides']`
+        // CRÉE les clés manquantes, et tous les autres types H5P (Memory, GameMap,
+        // remise en ordre…) se retrouvaient exportés avec un « presentation.slides: null »
+        // parasite dans leur json_content.
+        if (empty($h5pContent['presentation']['slides']) || !is_array($h5pContent['presentation']['slides'])) {
+            return;
+        }
+        $slides = &$h5pContent['presentation']['slides'];
         
         foreach ($slides as &$slide) {
             $elements = &$slide['elements'] ?? null;
@@ -5235,6 +5451,11 @@ class EleaMbzExporter {
             'H5P.Table' => 'Table',
             'H5P.Link' => 'Link',
             'H5P.Nil' => 'Label',
+            'H5P.ExportableTextArea' => 'Exportable Text Area',
+            'H5P.GameMap' => 'Game Map',
+            'H5P.ImageSequencing' => 'Image Sequencing',
+            'H5P.MemoryGame' => 'Memory Game',
+            'H5P.ImageMultipleHotspotQuestion' => 'Find Multiple Hotspots',
         ];
         
         $parts = explode(' ', $library);
@@ -5404,9 +5625,356 @@ class EleaMbzExporter {
                 return $this->buildThreeImageContent($content);
             case 'MultiMediaChoice':
                 return $this->buildMultiMediaChoiceContent($content);
+            case 'GameMap':
+                return $this->buildGameMapContent($content);
+            case 'ImageSequencing':
+                return $this->buildImageSequencingContent($content);
+            case 'MemoryGame':
+                return $this->buildMemoryGameContent($content);
+            case 'ImageMultipleHotspotQuestion':
+                return $this->buildMultiHotspotContent($content);
             default:
                 return $content;
         }
+    }
+
+    /**
+     * H5P.ImageMultipleHotspotQuestion (« Trouver les zones »).
+     * Structure relevée sur un export Éléa réel : une image de fond et une liste de zones
+     * dont x/y/width/height sont des POURCENTAGES, x/y étant le coin haut-gauche.
+     * Éléa n'écrit que ces deux blocs — on s'en tient donc exactement à ce format.
+     */
+    private function buildMultiHotspotContent($content) {
+        $q = $content['imageMultipleHotspotQuestion'] ?? [];
+        $bg = $q['backgroundImageSettings'] ?? [];
+
+        $image = $this->normalizeMemoryImage($bg['backgroundImage'] ?? null);
+
+        $zones = [];
+        foreach ($q['hotspotSettings']['hotspot'] ?? [] as $hs) {
+            if (!is_array($hs)) continue;
+            $cs = $hs['computedSettings'] ?? [];
+            if (!isset($cs['x'], $cs['y'])) continue;
+            $us = $hs['userSettings'] ?? [];
+            $zones[] = [
+                'userSettings' => [
+                    'correct'      => ($us['correct'] ?? true) !== false,
+                    'feedbackText' => (string)($us['feedbackText'] ?? ''),
+                ],
+                'computedSettings' => [
+                    'x'      => (float)$cs['x'],
+                    'y'      => (float)$cs['y'],
+                    'width'  => (float)($cs['width'] ?? 5),
+                    'height' => (float)($cs['height'] ?? 5),
+                    'figure' => ($cs['figure'] ?? 'circle') === 'rectangle' ? 'rectangle' : 'circle',
+                ],
+            ];
+        }
+
+        $settings = ['questionTitle' => (string)($bg['questionTitle'] ?? 'Image hotspot question')];
+        if ($image !== null) $settings['backgroundImage'] = $image;
+
+        return [
+            'imageMultipleHotspotQuestion' => [
+                'backgroundImageSettings' => $settings,
+                'hotspotSettings' => ['hotspot' => $zones],
+            ],
+        ];
+    }
+
+    /**
+     * H5P.MemoryGame : une entrée de `cards` = une paire.
+     * `match` (image de la jumelle) reste optionnel — Éléa réutilise `image` s'il est absent.
+     * Éléa attend le bloc l10n au complet, sinon le validateur refuse le contenu.
+     */
+    private function buildMemoryGameContent($content) {
+        $cards = [];
+        foreach ($content['cards'] ?? [] as $card) {
+            if (!is_array($card)) continue;
+            $image = $this->normalizeMemoryImage($card['image'] ?? null);
+            if ($image === null) continue;   // une carte sans image ferait planter Éléa
+
+            $entry = ['image' => $image];
+            if (($card['imageAlt'] ?? '') !== '') $entry['imageAlt'] = $card['imageAlt'];
+
+            $match = $this->normalizeMemoryImage($card['match'] ?? null);
+            if ($match !== null) {
+                $entry['match'] = $match;
+                // À défaut de texte alternatif propre à la jumelle, reprendre celui de l'image
+                $matchAlt = ($card['matchAlt'] ?? '') !== '' ? $card['matchAlt'] : ($card['imageAlt'] ?? '');
+                if ($matchAlt !== '') $entry['matchAlt'] = $matchAlt;
+            }
+            if (($card['description'] ?? '') !== '') $entry['description'] = $card['description'];
+
+            $cards[] = $entry;
+        }
+
+        $behaviour = $content['behaviour'] ?? [];
+        $out = [
+            'cards' => $cards,
+            'behaviour' => [
+                'useGrid'    => ($behaviour['useGrid'] ?? true) !== false,
+                'allowRetry' => ($behaviour['allowRetry'] ?? true) !== false,
+            ],
+            'lookNFeel' => [
+                'themeColor' => $content['lookNFeel']['themeColor'] ?? '#909090',
+            ],
+            'l10n' => array_merge([
+                'cardTurns'           => 'Cartes retournées :',
+                'timeSpent'           => 'Temps écoulé :',
+                'feedback'            => 'Bien joué !',
+                'tryAgain'            => 'Réessayer',
+                'closeLabel'          => 'Fermer',
+                'label'               => 'Jeu de mémoire. Trouver les cartes qui se correspondent.',
+                'done'                => 'Toutes les cartes ont été trouvées.',
+                'cardPrefix'          => 'Carte %num sur %total:',
+                'cardUnturned'        => 'Non retournées. Click to turn.',
+                'cardTurned'          => 'Turned.',
+                'cardMatched'         => 'Correspondance trouvée.',
+                'cardMatchedA11y'     => 'Your cards match!',
+                'cardNotMatchedA11y'  => 'Your chosen cards do not match. Turn other cards to try again.',
+            ], $content['l10n'] ?? []),
+        ];
+
+        // numCardsToUse : n'utiliser qu'une partie des paires (facultatif dans Éléa)
+        $numToUse = (int)($behaviour['numCardsToUse'] ?? 0);
+        if ($numToUse >= 2) {
+            $out['behaviour']['numCardsToUse'] = $numToUse;
+        }
+
+        $cardBack = $this->normalizeMemoryImage($content['lookNFeel']['cardBack'] ?? null);
+        if ($cardBack !== null) {
+            $out['lookNFeel']['cardBack'] = $cardBack;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Complète une image de Memory (mime + copyright) ; retourne null si elle est vide,
+     * pour ne jamais laisser une propriété média à null dans le JSON envoyé à Éléa.
+     */
+    private function normalizeMemoryImage($image) {
+        if (!is_array($image) || empty($image['path'])) {
+            return null;
+        }
+        if (!isset($image['mime'])) {
+            $ext = strtolower(pathinfo(parse_url($image['path'], PHP_URL_PATH) ?: $image['path'], PATHINFO_EXTENSION));
+            $mimeMap = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
+                        'gif' => 'image/gif', 'webp' => 'image/webp'];
+            $image['mime'] = $mimeMap[$ext] ?? 'image/png';
+        }
+        if (!isset($image['copyright'])) {
+            $image['copyright'] = ['license' => 'U'];
+        }
+        return $image;
+    }
+
+    /**
+     * H5P.ImageSequencing : l'ordre de sequenceImages EST la solution.
+     * Éléa attend une image complète (mime, copyright) et le bloc l10n au complet.
+     */
+    private function buildImageSequencingContent($content) {
+        $cards = [];
+        foreach ($content['sequenceImages'] ?? [] as $card) {
+            $image = $card['image'] ?? null;
+            if (is_array($image) && !empty($image['path'])) {
+                if (!isset($image['mime'])) {
+                    $ext = strtolower(pathinfo(parse_url($image['path'], PHP_URL_PATH) ?: $image['path'], PATHINFO_EXTENSION));
+                    $mimeMap = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
+                                'gif' => 'image/gif', 'webp' => 'image/webp'];
+                    $image['mime'] = $mimeMap[$ext] ?? 'image/png';
+                }
+                if (!isset($image['copyright'])) $image['copyright'] = ['license' => 'U'];
+            } else {
+                $image = null;
+            }
+            $entry = ['imageDescription' => $card['imageDescription'] ?? ''];
+            if ($image !== null) $entry['image'] = $image;
+            $cards[] = $entry;
+        }
+
+        $behaviour = $content['behaviour'] ?? [];
+
+        return [
+            'taskDescription' => $content['taskDescription'] ?? '',
+            'altTaskDescription' => $content['altTaskDescription']
+                ?? 'Make the following list be ordered correctly. Use the cursor keys to navigate through the list items, use space to activate or deactivate an item and the cursor keys to move it',
+            'sequenceImages' => $cards,
+            'behaviour' => [
+                'enableSolution' => ($behaviour['enableSolution'] ?? true) !== false,
+                'enableRetry'    => ($behaviour['enableRetry'] ?? true) !== false,
+                'enableResume'   => ($behaviour['enableResume'] ?? true) !== false,
+            ],
+            'l10n' => array_merge([
+                'totalMoves' => 'Total Moves',
+                'timeSpent' => 'Time spent',
+                'score' => 'You got @score of @total points',
+                'checkAnswer' => 'Check',
+                'tryAgain' => 'Retry',
+                'showSolution' => 'ShowSolution',
+                'resume' => 'Resume',
+                'audioNotSupported' => 'Audio Error',
+                'ariaPlay' => 'Play the corresponding audio',
+                'ariaMoveDescription' => 'Moved @cardDesc from @posSrc to @posDes',
+                'ariaCardDesc' => 'sequencing item',
+            ], $content['l10n'] ?? []),
+        ];
+    }
+
+    /**
+     * H5P.GameMap : carte d'étapes reliées. Éléa attend l'arborescence complète
+     * (titleScreen / endScreen / visual / audio / behaviour / l10n / a11y) et, sur chaque
+     * étape, les champs content, time, accessRestrictions et specialStageExtra*.
+     */
+    private function buildGameMapContent($content) {
+        $steps = $content['gamemapSteps']['gamemap']['elements'] ?? [];
+        $background = $content['gamemapSteps']['backgroundImageSettings']['backgroundImage'] ?? null;
+
+        foreach ($steps as $i => &$step) {
+            if (!isset($step['id']) || $step['id'] === '') $step['id'] = $this->generateUUID();
+            if (!isset($step['label'])) $step['label'] = 'Étape ' . ($i + 1);
+            if (!isset($step['content']) || !is_array($step['content'])) {
+                $step['content'] = ['params' => new \stdClass(), 'dom' => ['count' => 0]];
+            }
+            $step['telemetry'] = [
+                'x'      => (string)($step['telemetry']['x'] ?? '50'),
+                'y'      => (string)($step['telemetry']['y'] ?? '50'),
+                'width'  => (string)($step['telemetry']['width'] ?? '4.375'),
+                'height' => (string)($step['telemetry']['height'] ?? '7.814060667441372'),
+            ];
+            // Les voisins sont des INDICES d'étapes, stockés en chaînes par Éléa
+            $step['neighbors'] = array_values(array_map('strval', $step['neighbors'] ?? []));
+            $step['canBeStartStage'] = !empty($step['canBeStartStage']);
+            if (!isset($step['time']) || (is_array($step['time']) && empty($step['time']))) {
+                $step['time'] = new \stdClass();
+            }
+            if (!isset($step['accessRestrictions'])) {
+                $step['accessRestrictions'] = ['openOnScoreSufficient' => false];
+            }
+            if (!isset($step['specialStageExtraLives'])) $step['specialStageExtraLives'] = 1;
+            if (!isset($step['specialStageExtraTime'])) $step['specialStageExtraTime'] = 1;
+            // Une étape sans contenu (case d'arrivée) garde un contentType vide, comme Éléa
+            if (!isset($step['contentType']) || !is_array($step['contentType'])) {
+                $step['contentType'] = ['params' => new \stdClass()];
+            } elseif (empty($step['contentType']['library'])) {
+                $step['contentType'] = ['params' => new \stdClass()];
+            }
+        }
+        unset($step);
+
+        $visual = $content['visual'] ?? [];
+        $behaviour = $content['behaviour'] ?? [];
+
+        return [
+            'showTitleScreen' => !empty($content['showTitleScreen']),
+            'titleScreen' => [
+                'titleScreenIntroduction' => $content['titleScreen']['titleScreenIntroduction'] ?? '<p style="text-align: center;"></p>',
+                'titleScreenMedium' => ['params' => new \stdClass()],
+            ],
+            'gamemapSteps' => [
+                'backgroundImageSettings' => [
+                    'backgroundImage' => $background ?: null,
+                ],
+                'gamemap' => ['elements' => array_values($steps)],
+            ],
+            'endScreen' => [
+                'noSuccess' => [
+                    'endScreenTextNoSuccess' => $content['endScreen']['noSuccess']['endScreenTextNoSuccess'] ?? '<p style="text-align: center;"></p>',
+                    'endScreenMediumNoSuccess' => ['params' => new \stdClass()],
+                ],
+                'success' => [
+                    'endScreenTextSuccess' => $content['endScreen']['success']['endScreenTextSuccess'] ?? '<p style="text-align: center;"></p>',
+                    'endScreenMediumSuccess' => ['params' => new \stdClass()],
+                ],
+                'overallFeedback' => [['from' => 0, 'to' => 100]],
+            ],
+            'visual' => [
+                'stages' => [
+                    'colorStage'        => $visual['stages']['colorStage']        ?? 'rgba(250, 223, 10, 0.7)',
+                    'colorStageLocked'  => $visual['stages']['colorStageLocked']  ?? 'rgba(153, 0, 0, 0.7)',
+                    'colorStageCleared' => $visual['stages']['colorStageCleared'] ?? 'rgba(0, 130, 0, 0.7)',
+                ],
+                'paths' => [
+                    'displayPaths' => ($visual['paths']['displayPaths'] ?? true) !== false,
+                    'style' => [
+                        'colorPath'        => $visual['paths']['style']['colorPath']        ?? 'rgba(255, 255, 255, 0.904)',
+                        'colorPathCleared' => $visual['paths']['style']['colorPathCleared'] ?? 'rgba(0, 130, 0, 0.7)',
+                        'pathWidth'        => (string)($visual['paths']['style']['pathWidth'] ?? '0.2'),
+                        'pathStyle'        => $visual['paths']['style']['pathStyle'] ?? 'dotted',
+                    ],
+                ],
+                'misc' => ['useAnimation' => ($visual['misc']['useAnimation'] ?? true) !== false],
+            ],
+            'audio' => [
+                'backgroundMusic' => ['muteDuringExercise' => true],
+                'ambient' => new \stdClass(),
+            ],
+            'behaviour' => [
+                'enableRetry' => ($behaviour['enableRetry'] ?? true) !== false,
+                'enableSolutionsButton' => ($behaviour['enableSolutionsButton'] ?? true) !== false,
+                'map' => [
+                    'showLabels' => ($behaviour['map']['showLabels'] ?? true) !== false,
+                    'roaming'    => $behaviour['map']['roaming'] ?? 'complete',
+                    'fog'        => $behaviour['map']['fog'] ?? 'all',
+                ],
+            ],
+            'l10n' => array_merge([
+                'start' => 'Start',
+                'continue' => 'Continue',
+                'restart' => 'Restart',
+                'showSolutions' => 'Show solutions',
+                'completedMap' => 'You have completed the map!',
+                'fullScoreButnoLivesLeft' => 'You have achieved full score, but lost all your lifes!',
+                'fullScoreButTimeout' => 'You have achieved full score, but ran out of time!',
+                'confirmFinishHeader' => "Finir l'activité ?",
+                'confirmFinishDialog' => 'Avant de terminer, explorez tous les points et répondez au questions',
+                'confirmFinishDialogSubmission' => 'Your score will be submitted.',
+                'confirmFinishDialogQuestion' => 'Voulez-vous finir cette activité ?',
+                'confirmAccessDeniedHeader' => 'Stage locked',
+                'confirmAccessDeniedDialog' => 'This stage requires you to meet some goals before it can be opened.',
+                'confirmAccessDeniedMinScore' => 'You need at least a certain number of points: @minscore',
+                'yes' => 'Yes',
+                'no' => 'No',
+                'confirmGameOverHeader' => 'Game over!',
+                'confirmGameOverDialog' => 'You have lost all your lives. Please try again!',
+                'confirmGameOverDialogTimeout' => 'You have run out of time. Please try again!',
+                'confirmTimeoutHeader' => 'Time out!',
+                'confirmTimeoutDialog' => 'You ran out of time.',
+                'confirmTimeoutDialogLostLife' => 'You ran out of time and lost a life.',
+                'confirmScoreIncompleteHeader' => 'Not full score!',
+                'confirmIncompleteScoreDialogLostLife' => 'You did not achieve full score and lost a life.',
+                'confirmFullScoreHeader' => 'You achieved full score!',
+                'confirmFullScoreDialog' => 'You have collected enough points to finish this map with a full score, but you are free to explore the rest if you wish to.',
+                'confirmFullScoreDialogLoseLivesAmendmend' => 'But beware! You may still lose lives!',
+                'ok' => 'OK',
+                'noBackground' => 'No background image was set for the map.',
+                'noStages' => 'No valid stages were set for the map.',
+            ], $content['l10n'] ?? []),
+            'a11y' => array_merge([
+                'buttonFinish' => 'Finir',
+                'buttonAudioActive' => 'Mute audio. Currently unmuted.',
+                'buttonAudioInactive' => 'Unmute audio. Currently muted.',
+                'close' => 'Close',
+                'yourResult' => 'You got @score out of @total points',
+                'mapWasOpened' => 'The map was opened.',
+                'mapSolutionsWasOpened' => 'The map was opened in solutions mode.',
+                'startScreenWasOpened' => 'The title screen was opened.',
+                'endScreenWasOpened' => 'The end screen was opened.',
+                'exerciseLabel' => '. Exercise for @stagelabel',
+                'stageButtonLabel' => 'Stage: @stagelabel',
+                'adjacentStageLabel' => 'Adjacent stage of @stagelabelOrigin: @stagelabelNeighbor',
+                'locked' => 'Locked',
+                'cleared' => 'Cleared',
+                'applicationInstructions' => 'Use space or enter key to activate current stage. Use arrow keys to select adjacent stage. Use space or enter key on adjacent stage to navigate there.',
+                'applicationDescription' => 'Map',
+                'movedToStage' => 'Moved to @stagelabel',
+                'stageUnlocked' => 'Stage @stagelabel was unlocked.',
+                'toolbarFallbackLabel' => 'Game Map',
+                'enterFullscreen' => 'Enter fullscreen mode',
+                'exitFullscreen' => 'Exit fullscreen mode',
+            ], $content['a11y'] ?? []),
+        ];
     }
     
     /**
@@ -5465,7 +6033,8 @@ class EleaMbzExporter {
                         
                         // Normaliser <b>→<strong>, <i>→<em> dans tous les champs texte riches
                         // (navigateurs produisent <b>/<i> via Ctrl+B/I, Éléa attend <strong>/<em>)
-                        $richTextFields = ['text', 'question'];
+                        // 'label' : consigne d'une zone de saisie libre (H5P.ExportableTextArea)
+                        $richTextFields = ['text', 'question', 'label'];
                         foreach ($richTextFields as $rtf) {
                             if (isset($element['action']['params'][$rtf]) && is_string($element['action']['params'][$rtf])) {
                                 $element['action']['params'][$rtf] = preg_replace('/<b(\s|>)/i', '<strong$1', $element['action']['params'][$rtf]);
@@ -5481,6 +6050,19 @@ class EleaMbzExporter {
                             }
                         }
                         
+                        // Zone de saisie libre : Éléa attend les 4 paramètres, même vides
+                        if (strpos($lib, 'H5P.ExportableTextArea') !== false) {
+                            $element['action']['library'] = 'H5P.ExportableTextArea 1.3';
+                            $etaParams = &$element['action']['params'];
+                            if (!isset($etaParams['index'])) $etaParams['index'] = 0;
+                            if (!isset($etaParams['exportNotSupported'])) {
+                                $etaParams['exportNotSupported'] = "La fonction export n'est pas supportée sur cet équipement.";
+                            }
+                            if (!isset($etaParams['exportComments'])) $etaParams['exportComments'] = false;
+                            if (!isset($etaParams['label'])) $etaParams['label'] = '';
+                            unset($etaParams);
+                        }
+
                         // Enrichir les DialogCards avec tous les champs requis
                         if (strpos($lib, 'H5P.Dialogcards') !== false || strpos($lib, 'H5P.DialogCards') !== false) {
                             $element['action']['library'] = 'H5P.Dialogcards 1.9'; // Forcer le bon nom

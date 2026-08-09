@@ -766,7 +766,43 @@ foreach ($sections as $sIndex => $section) {
     }
     /* Laisser le surlignage déborder de l'élément CoursePresentation (sinon rogné par sa box) */
     .course-content .h5p-cp-element:has(span[style*="background-color"]) { overflow: visible; }
-    
+
+    /* ===== H5P.ExportableTextArea : consigne + zone de saisie libre ===== */
+    .h5p-eta {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5em;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        padding: 0.378em;   /* même retrait que .h5p-cp-text : aligné sur le texte voisin */
+        box-sizing: border-box;
+        color: #333;
+        font-size: 1em;
+    }
+    .h5p-eta-label { line-height: 1.5; }
+    .h5p-eta-label p { margin: 0 0 0.5em 0; }
+    .h5p-eta-label p:last-child { margin-bottom: 0; }
+    .h5p-eta-input {
+        flex: 1 1 auto;
+        width: 100%;
+        min-height: 3.4em;
+        box-sizing: border-box;
+        padding: 0.6em 0.75em;
+        font-family: inherit;
+        font-size: 1em;
+        line-height: 1.5;
+        color: #333;
+        background: #fff;
+        border: 2px solid #ccd3f0;
+        border-radius: 0.5em;
+        resize: none;
+        outline: none;
+    }
+    .h5p-eta-input:focus { border-color: #8f9de0; }
+    /* Hors Course Presentation le parent n'est pas dimensionné : donner une hauteur au champ */
+    .activity-h5p > .h5p-content > .h5p-eta { min-height: 8em; }
+
     /* H5P MultiChoice - réponses avec étiquettes style Éléa */
     .h5p-multichoice .h5p-answers { display: flex; flex-direction: column; gap: 0.5rem; }
     .h5p-multichoice .h5p-answer-option {
@@ -1443,45 +1479,297 @@ foreach ($sections as $sIndex => $section) {
     .h5p-fc-nav { display: flex; justify-content: center; align-items: center; gap: 1rem; margin-top: 1rem; }
     .h5p-fc-progress { font-weight: 600; color: #666; }
     
-    /* H5P Memory Game */
-    .h5p-memorygame { padding: 1rem; }
-    .h5p-memory-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin-bottom: 1rem; }
-    .h5p-memory-card {
-        aspect-ratio: 1;
-        background: #e0e0e0;
-        border-radius: 8px;
-        cursor: pointer;
-        position: relative;
-        overflow: hidden;
-        transition: transform 0.3s;
+    /* ===== H5P.MemoryGame — calqué sur Éléa =====
+       Dos gris clair (#ccc) avec un « ? » à la couleur du thème (lookNFeel.themeColor,
+       #707070 dans les cours de référence), retournement 3D, paire trouvée laissée
+       visible à 30 % d'opacité. Le contenu du cours est un « îlot clair » :
+       les couleurs en dur sont volontaires, y compris en mode sombre. */
+    .h5p-memorygame { padding: 1rem; position: relative; --memo-color: #909090; }
+    .h5p-memory-grid {
+        list-style: none;
+        margin: 0 0 1.5rem;
+        padding: 0;
+        display: grid;
+        grid-template-columns: repeat(var(--memo-cols, 4), 1fr);
+        gap: 30px 18px;
     }
-    .h5p-memory-card:hover { transform: scale(1.05); }
-    .h5p-memory-front, .h5p-memory-back {
-        position: absolute;
+    .h5p-memory-grid.h5p-memory-free {
+        grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+    }
+    .h5p-memory-wrap { perspective: 600px; margin: 0; padding: 0; }
+    .h5p-memory-card {
+        position: relative;
         width: 100%;
-        height: 100%;
+        aspect-ratio: 1 / 1;
+        cursor: pointer;
+        transform-style: preserve-3d;
+        transition: transform 0.5s ease;
+        -webkit-tap-highlight-color: transparent;
+    }
+    .h5p-memory-card:focus { outline: none; }
+    .h5p-memory-card:focus-visible .h5p-memory-face { box-shadow: 0 0 0 3px #f0a30a, 0 4px 6px rgba(0,0,0,0.14); }
+    .h5p-memory-card.flipped, .h5p-memory-card.matched { transform: rotateY(180deg); }
+    .h5p-memory-card.matched { cursor: default; }
+    /* L'estompage de la paire trouvée porte sur les FACES : une opacité sur la carte
+       elle-même forcerait transform-style à « flat » et le dos réapparaîtrait en miroir. */
+    .h5p-memory-card.matched .h5p-memory-face { opacity: 0.3; }
+    .h5p-memory-face {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
         display: flex;
         align-items: center;
         justify-content: center;
+        overflow: hidden;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.14);
         backface-visibility: hidden;
-        transition: opacity 0.3s;
+        -webkit-backface-visibility: hidden;
+        transition: opacity 0.5s ease;
     }
-    .h5p-memory-front { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-size: 2rem; }
-    .h5p-memory-back { background: white; opacity: 0; }
-    .h5p-memory-back img { max-width: 90%; max-height: 90%; object-fit: contain; }
-    .h5p-memory-card.flipped .h5p-memory-front { opacity: 0; }
-    .h5p-memory-card.flipped .h5p-memory-back { opacity: 1; }
-    .h5p-memory-card.matched { background: #c8e6c9; }
-    .h5p-memory-card.matched .h5p-memory-front { opacity: 0; }
-    .h5p-memory-card.matched .h5p-memory-back { opacity: 1; }
-    .h5p-memory-info { display: flex; justify-content: space-between; align-items: center; }
-    
-    /* H5P Game Map */
+    .h5p-memory-front { background: #ccc; }
+    .h5p-memory-front img { width: 100%; height: 100%; object-fit: cover; }
+    .h5p-memory-qmark {
+        color: var(--memo-color, #909090);
+        font-size: 3.4rem;
+        font-weight: 700;
+        line-height: 1;
+        font-family: "Trebuchet MS", "Segoe UI", Arial, sans-serif;
+        user-select: none;
+    }
+    .h5p-memory-back { background: #fff; transform: rotateY(180deg); }
+    .h5p-memory-back img { width: 100%; height: 100%; object-fit: contain; }
+    /* « Temps écoulé :» (l10n) + le « :» ajouté ici = le «::» qu'affiche Éléa */
+    .h5p-memory-status {
+        margin: 0;
+        font-size: 0.95rem;
+        display: grid;
+        grid-template-columns: max-content auto;
+        gap: 0.9rem 1rem;
+        justify-content: start;
+        align-items: baseline;
+    }
+    .h5p-memory-status dt { font-weight: 700; color: #1c2260; }
+    .h5p-memory-status dt::after { content: ':'; }
+    .h5p-memory-status dd { margin: 0; color: #1c2260; }
+    .h5p-memory-done {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+        margin-top: 0.75rem;
+        padding: 0.75rem 1rem;
+        background: #e8f5e9;
+        border: 1px solid #a5d6a7;
+        border-radius: 8px;
+        color: #1b5e20;
+        font-weight: 600;
+    }
+    .h5p-memory-retry {
+        background: var(--memo-color, #909090);
+        color: #fff;
+        border: none;
+        border-radius: 20px;
+        padding: 0.4rem 1rem;
+        font-size: 0.9rem;
+        font-weight: 600;
+        cursor: pointer;
+    }
+    .h5p-memory-retry:hover { filter: brightness(0.9); }
+    .h5p-memory-popup {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0,0,0,0.55);
+        z-index: 5;
+    }
+    .h5p-memorygame { position: relative; }
+    .h5p-memory-popup-inner {
+        background: #fff;
+        border-radius: 10px;
+        padding: 1.5rem;
+        max-width: 80%;
+        text-align: center;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+    }
+    .h5p-memory-popup-text { margin: 0 0 1rem; font-size: 1.05rem; color: #333; }
+    .h5p-memory-popup-close {
+        background: var(--memo-color, #909090);
+        color: #fff;
+        border: none;
+        border-radius: 20px;
+        padding: 0.4rem 1.4rem;
+        font-size: 0.9rem;
+        cursor: pointer;
+    }
+
+    /* ===== H5P.ImageMultipleHotspotQuestion : trouver les zones =====
+       x/y/width/height des zones sont des POURCENTAGES de l'image de fond,
+       x/y désignant le coin haut-gauche. Le contenu du cours est un « îlot clair » :
+       les couleurs en dur sont volontaires, y compris en mode sombre. */
+    .h5p-fmh { padding: 1rem; }
+    .h5p-fmh-image {
+        position: relative;
+        display: inline-block;
+        max-width: 100%;
+        cursor: crosshair;
+        user-select: none;
+    }
+    .h5p-fmh-image img { display: block; max-width: 100%; height: auto; }
+    .h5p-fmh-marques { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; }
+    .h5p-fmh-marque {
+        position: absolute;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        font-weight: 700;
+        line-height: 1;
+        animation: fmh-pop 0.25s ease-out;
+    }
+    .h5p-fmh-marque.juste { background: rgba(76, 175, 80, 0.28); color: #2e7d32; }
+    .h5p-fmh-marque.faux  { background: rgba(233, 30, 99, 0.22); color: #c2185b; }
+    @keyframes fmh-pop { from { transform: scale(0.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    .h5p-fmh-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        margin-top: 0.9rem;
+        padding: 0.35rem 0.75rem 0.35rem 0.35rem;
+        border: 1px solid #e0e0e0;
+        border-radius: 999px;
+        width: max-content;
+        max-width: 100%;
+        background: #fff;
+    }
+    .h5p-fmh-jauge {
+        width: 110px;
+        height: 14px;
+        border-radius: 999px;
+        background: #e0e0e0;
+        overflow: hidden;
+    }
+    .h5p-fmh-jauge-fill { display: block; height: 100%; background: #4caf50; transition: width 0.3s ease; }
+    .h5p-fmh-etoile { color: #bdbdbd; font-size: 1.25rem; line-height: 1; }
+    .h5p-fmh-etoile.complet { color: #fbc02d; }
+    .h5p-fmh-score { font-weight: 700; color: #333; }
+    .h5p-fmh-feedback {
+        margin-top: 0.6rem;
+        padding: 0.6rem 0.8rem;
+        border-radius: 8px;
+        background: #f1f8e9;
+        border: 1px solid #c5e1a5;
+        color: #33691e;
+        font-size: 0.9rem;
+    }
+    .h5p-fmh-feedback.faux { background: #fce4ec; border-color: #f8bbd0; color: #880e4f; }
+
+    /* ===== H5P.ImageSequencing : remettre des images dans l'ordre ===== */
+    .h5p-imageseq { padding: 1rem; }
+    .h5p-is-task {
+        font-size: 1rem;
+        color: #333;
+        padding-bottom: 0.75rem;
+        margin-bottom: 1rem;
+        border-bottom: 1px solid #e0e0e0;
+    }
+    .h5p-is-task p { margin: 0; }
+    .h5p-is-cards {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+    .h5p-is-card {
+        flex: 0 0 auto;
+        width: 180px;
+        max-width: 42vw;
+        background: #fff;
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        padding: 8px;
+        box-sizing: border-box;
+        cursor: grab;
+        transition: box-shadow 0.15s, transform 0.15s, border-color 0.15s;
+        user-select: none;
+    }
+    .h5p-is-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+    .h5p-is-card.dragging { opacity: 0.4; }
+    .h5p-is-card.selected { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.25); }
+    .h5p-is-card.drop-target { border-color: #2563eb; border-style: dashed; }
+    .h5p-is-card-img { position: relative; }
+    .h5p-is-card-img img {
+        width: 100%;
+        aspect-ratio: 1;
+        object-fit: contain;
+        display: block;
+        pointer-events: none;
+    }
+    /* Pastille de correction posée après « Vérifier » */
+    .h5p-is-mark {
+        display: none;
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        color: #fff;
+        font-size: 0.85rem;
+        line-height: 24px;
+        text-align: center;
+        font-weight: 700;
+    }
+    .h5p-is-card.correct .h5p-is-mark { display: block; background: #16a34a; }
+    .h5p-is-card.correct .h5p-is-mark::after { content: '✔'; }
+    .h5p-is-card.wrong .h5p-is-mark { display: block; background: #dc2626; }
+    .h5p-is-card.wrong .h5p-is-mark::after { content: '✘'; }
+    .h5p-is-card.correct { border-color: #16a34a; }
+    .h5p-is-card.wrong { border-color: #dc2626; }
+    .h5p-is-card-label {
+        margin-top: 6px;
+        text-align: center;
+        font-size: 0.85rem;
+        color: #333;
+        line-height: 1.3;
+    }
+    .h5p-is-footer {
+        margin-top: 1rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid #e0e0e0;
+    }
+    .h5p-is-stats { display: flex; gap: 2.5rem; margin-bottom: 0.75rem; }
+    .h5p-is-stat { display: flex; flex-direction: column; }
+    .h5p-is-stat-label { font-size: 0.9rem; color: #333; }
+    .h5p-is-stat-value { font-size: 0.9rem; color: #333; padding-left: 0.75rem; }
+    .h5p-is-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .h5p-is-btn {
+        background: #2563eb;
+        color: #fff;
+        border: none;
+        padding: 8px 18px;
+        border-radius: 6px;
+        font-size: 0.95rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+    .h5p-is-btn:hover { background: #1d4ed8; }
+    .h5p-is-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+    .h5p-is-feedback {
+        margin-top: 0.75rem;
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #333;
+    }
+
+    /* H5P Game Map — calqué sur le rendu Éléa (couleurs et tailles viennent du contenu) */
     .h5p-gamemap { padding: 1rem; }
-    .h5p-gamemap-container { position: relative; }
+    /* container-type : permet aux pastilles d'avoir une bordure proportionnelle à la carte (cqw) */
+    .h5p-gamemap-container { position: relative; overflow: hidden; border-radius: 12px; container-type: inline-size; }
     .h5p-gamemap-bg { width: 100%; border-radius: 12px; display: block; }
-    
-    /* SVG pour les chemins */
+    .h5p-gamemap-bg-empty { aspect-ratio: 16 / 9; background: #cfd8dc; }
+
+    /* SVG pour les chemins : épaisseur et pointillés posés en attribut par le rendu PHP */
     .h5p-gamemap-paths {
         position: absolute;
         top: 0; left: 0;
@@ -1490,64 +1778,56 @@ foreach ($sections as $sIndex => $section) {
         z-index: 5;
     }
     .h5p-gamemap-path {
-        stroke: white;
-        stroke-width: 0.5;
-        stroke-dasharray: 1.5, 1.5;
+        stroke: var(--gm-path, rgba(255,255,255,0.904));
         stroke-linecap: round;
         fill: none;
-        filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
+        transition: stroke 0.3s;
     }
     .h5p-gamemap-path.active {
-        stroke: #4caf50;
-        stroke-width: 0.7;
+        stroke: var(--gm-path-cleared, rgba(0,130,0,0.7));
     }
-    
+
     .h5p-gamemap-steps { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+    /* La pastille occupe la boîte décrite par telemetry (x/y = coin haut-gauche) */
     .h5p-gamemap-step {
         position: absolute;
-        transform: translate(-50%, -50%);
-        background: #ffc107;
-        color: #333;
+        padding: 0;
+        background: var(--gm-stage, rgba(250,223,10,0.7));
+        color: #fff;
         border-radius: 50%;
-        width: 36px;
-        height: 36px;
         display: flex;
         align-items: center;
         justify-content: center;
         cursor: pointer;
-        box-shadow: 0 3px 10px rgba(0,0,0,0.4);
+        box-shadow: 0 2px 6px rgba(0,0,0,0.4);
         transition: transform 0.2s, box-shadow 0.2s, background 0.3s;
         z-index: 10;
-        border: 3px solid white;
+        border: 0.36cqw solid #fff;   /* 3px sur une carte de 830px, comme Éléa */
+        box-sizing: border-box;
     }
-    .h5p-gamemap-step:hover:not(.locked) { 
-        transform: translate(-50%, -50%) scale(1.15); 
-        box-shadow: 0 5px 15px rgba(0,0,0,0.5); 
+    .h5p-gamemap-step:hover:not(.locked),
+    .h5p-gamemap-step:focus-visible:not(.locked) {
+        transform: scale(1.15);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        outline: none;
     }
-    .h5p-gamemap-step.completed { 
-        background: #4caf50;
-        color: white;
-    }
+    .h5p-gamemap-step.completed { background: var(--gm-stage-cleared, rgba(0,130,0,0.7)); }
     .h5p-gamemap-step.locked {
-        background: #b71c1c;
-        color: white;
+        background: var(--gm-stage-locked, rgba(153,0,0,0.7));
         cursor: not-allowed;
-        opacity: 0.9;
     }
-    .h5p-gamemap-step.locked:hover {
-        transform: translate(-50%, -50%);
+    .h5p-gamemap-step-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 55%;
+        height: 55%;
     }
-    .h5p-gamemap-step.final {
-        background: #ff9800;
-    }
-    .h5p-gamemap-step.final.completed {
-        background: #4caf50;
-    }
-    .h5p-gamemap-step-icon { font-weight: bold; font-size: 0.9rem; }
-    .h5p-gamemap-step-label { 
+    .h5p-gamemap-step-svg { width: 100%; height: 100%; display: block; }
+    .h5p-gamemap-step-label {
         display: none;
         position: absolute;
-        bottom: -20px;
+        top: 105%;
         left: 50%;
         transform: translateX(-50%);
         white-space: nowrap;
@@ -1556,44 +1836,62 @@ foreach ($sections as $sIndex => $section) {
         color: white;
         padding: 2px 6px;
         border-radius: 3px;
+        pointer-events: none;
     }
-    .h5p-gamemap-step:hover .h5p-gamemap-step-label {
+    .h5p-gamemap:not(.no-labels) .h5p-gamemap-step:hover .h5p-gamemap-step-label,
+    .h5p-gamemap:not(.no-labels) .h5p-gamemap-step:focus-visible .h5p-gamemap-step-label {
         display: block;
     }
-    
+
+    /* Le panneau d'étape recouvre la carte (et non toute la fenêtre), comme dans Éléa */
     .h5p-gamemap-modal {
-        position: fixed;
+        position: absolute;
         top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0,0,0,0.6);
+        background: rgba(0,0,0,0.55);
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: center;
-        z-index: 1000;
+        z-index: 20;
+        padding: 4%;
+        box-sizing: border-box;
     }
     .h5p-gamemap-modal-content {
         background: white;
-        border-radius: 12px;
-        max-width: 600px;
-        width: 90%;
-        max-height: 80vh;
+        border-radius: 6px;
+        width: 100%;
+        max-height: 100%;
         overflow: auto;
+        box-shadow: 0 6px 24px rgba(0,0,0,0.35);
     }
     .h5p-gamemap-modal-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 1rem 1.5rem;
-        border-bottom: 1px solid #eee;
+        padding: 0.6rem 1.25rem 0.4rem;
+        border-bottom: 1px solid #ddd;
     }
-    .h5p-gamemap-modal-header h4 { margin: 0; }
+    .h5p-gamemap-modal-header h4 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 700;
+        color: #2c3e50;
+    }
     .h5p-gamemap-close {
-        background: none;
-        border: none;
-        font-size: 1.5rem;
+        position: absolute;
+        top: 0.6rem;
+        right: 0.6rem;
+        width: 1.9rem;
+        height: 1.9rem;
+        border-radius: 50%;
+        background: #fff;
+        border: 1px solid #333;
+        font-size: 0.9rem;
+        line-height: 1;
         cursor: pointer;
-        color: #666;
+        color: #222;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 21;
     }
-    .h5p-gamemap-modal-body { padding: 1.5rem; }
+    .h5p-gamemap-modal-body { padding: 1.25rem; }
     .h5p-gamemap-progress { margin-top: 1rem; text-align: center; color: #666; }
     
     /* Message de fin */
@@ -3608,131 +3906,498 @@ foreach ($sections as $sIndex => $section) {
         }
     }
 
-    // H5P Memory Game
-    var memoryFlipped = [];
-    var memoryLocked = false;
-    
+    // H5P Memory Game — un état PAR jeu (plusieurs memory sur une même page possible).
+    // Comportement d'Éléa : deux cartes différentes restent visibles ; c'est le clic sur
+    // une TROISIÈME carte qui les retourne face cachée. Une paire trouvée reste face
+    // visible, estompée. Le chrono démarre au premier retournement.
+    window.memoryGameState = window.memoryGameState || {};
+
+    function initMemoryGame(containerId) {
+        var container = document.getElementById(containerId);
+        var state = window.memoryGameState[containerId];
+        if (!container || !state) return;
+
+        var grid = container.querySelector('.h5p-memory-grid');
+        var items = Array.prototype.slice.call(grid.children);
+        for (var i = items.length - 1; i > 0; i--) {
+            var j = Math.floor(Math.random() * (i + 1));
+            var t = items[i]; items[i] = items[j]; items[j] = t;
+        }
+        items.forEach(function(li, idx) {
+            grid.appendChild(li);
+            var card = li.querySelector('.h5p-memory-card');
+            if (card) card.setAttribute('aria-label', memoryCardLabel(state, idx, items.length, state.l10n.cardUnturned));
+        });
+    }
+
+    function memoryCardLabel(state, idx, total, suffix) {
+        var prefix = (state.l10n.cardPrefix || 'Carte %num sur %total:')
+            .replace('%num', idx + 1).replace('%total', total);
+        return prefix + ' ' + (suffix || '');
+    }
+
+    function memoryFormatTime(sec) {
+        var h = Math.floor(sec / 3600);
+        var m = Math.floor((sec % 3600) / 60);
+        var s = sec % 60;
+        return ('0' + h).slice(-2) + ':' + ('0' + m).slice(-2) + ':' + ('0' + s).slice(-2);
+    }
+
+    function memoryStartTimer(containerId) {
+        var container = document.getElementById(containerId);
+        var state = window.memoryGameState[containerId];
+        if (!container || !state || state.timer) return;
+        state.timer = setInterval(function() {
+            state.seconds++;
+            var el = container.querySelector('.h5p-memory-timer');
+            if (el) el.textContent = memoryFormatTime(state.seconds);
+        }, 1000);
+    }
+
+    function memoryCardKey(event, card, containerId) {
+        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+            event.preventDefault();
+            flipMemoryCard(card, containerId);
+        }
+    }
+
+    // Retourne face cachée les deux cartes non appariées encore visibles
+    function memoryFlipBackOpened(state) {
+        state.opened.forEach(function(c) {
+            c.classList.remove('flipped');
+            var label = c.getAttribute('aria-label') || '';
+            c.setAttribute('aria-label', label.replace(state.l10n.cardTurned, state.l10n.cardUnturned));
+        });
+        state.opened = [];
+    }
+
     function flipMemoryCard(card, containerId) {
-        if (memoryLocked || card.classList.contains('flipped') || card.classList.contains('matched')) return;
-        
+        var container = document.getElementById(containerId);
+        var state = window.memoryGameState[containerId];
+        if (!container || !state || state.done) return;
+        if (card.classList.contains('flipped') || card.classList.contains('matched')) return;
+
+        // Le clic sur une 3e carte referme les deux précédentes
+        if (state.opened.length >= 2) memoryFlipBackOpened(state);
+
         card.classList.add('flipped');
-        memoryFlipped.push(card);
-        
-        if (memoryFlipped.length === 2) {
-            memoryLocked = true;
-            var c1 = memoryFlipped[0];
-            var c2 = memoryFlipped[1];
-            
-            if (c1.dataset.match === c2.dataset.match) {
-                // Match!
-                c1.classList.add('matched');
-                c2.classList.add('matched');
-                memoryFlipped = [];
-                memoryLocked = false;
-                
-                // Update score
-                var container = document.getElementById(containerId);
-                var score = container.querySelector('.h5p-memory-score');
-                score.textContent = parseInt(score.textContent) + 1;
-            } else {
-                // No match
+        var label = card.getAttribute('aria-label') || '';
+        card.setAttribute('aria-label', label.replace(state.l10n.cardUnturned, state.l10n.cardTurned));
+        state.opened.push(card);
+
+        state.flips++;
+        var counter = container.querySelector('.h5p-memory-counter');
+        if (counter) counter.textContent = state.flips;
+        memoryStartTimer(containerId);
+
+        if (state.opened.length === 2) {
+            var a = state.opened[0], b = state.opened[1];
+            if (a.dataset.pair === b.dataset.pair) {
+                state.opened = [];
+                state.found++;
+                // Laisser l'animation de retournement se terminer avant d'estomper
                 setTimeout(function() {
-                    c1.classList.remove('flipped');
-                    c2.classList.remove('flipped');
-                    memoryFlipped = [];
-                    memoryLocked = false;
-                }, 1000);
+                    [a, b].forEach(function(c) {
+                        c.classList.remove('flipped');
+                        c.classList.add('matched');
+                        c.setAttribute('tabindex', '-1');
+                        var l = c.getAttribute('aria-label') || '';
+                        c.setAttribute('aria-label', l.replace(state.l10n.cardTurned, state.l10n.cardMatched));
+                    });
+                    var desc = a.dataset.desc || '';
+                    if (desc) showMemoryPopup(containerId, desc);
+                    if (state.found >= state.pairs) finishMemoryGame(containerId);
+                }, 550);
             }
         }
     }
-    
+
+    function showMemoryPopup(containerId, text) {
+        var container = document.getElementById(containerId);
+        if (!container) return;
+        var popup = container.querySelector('.h5p-memory-popup');
+        if (!popup) return;
+        popup.querySelector('.h5p-memory-popup-text').textContent = text;
+        popup.style.display = 'flex';
+    }
+
+    function closeMemoryPopup(containerId) {
+        var container = document.getElementById(containerId);
+        if (!container) return;
+        var popup = container.querySelector('.h5p-memory-popup');
+        if (popup) popup.style.display = 'none';
+    }
+
+    function finishMemoryGame(containerId) {
+        var container = document.getElementById(containerId);
+        var state = window.memoryGameState[containerId];
+        if (!container || !state) return;
+        state.done = true;
+        if (state.timer) { clearInterval(state.timer); state.timer = null; }
+        var done = container.querySelector('.h5p-memory-done');
+        if (done) done.style.display = 'flex';
+    }
+
     function resetMemoryGame(containerId) {
         var container = document.getElementById(containerId);
-        var cards = container.querySelectorAll('.h5p-memory-card');
-        for (var i = 0; i < cards.length; i++) {
-            cards[i].classList.remove('flipped', 'matched');
+        var state = window.memoryGameState[containerId];
+        if (!container || !state) return;
+
+        if (state.timer) { clearInterval(state.timer); state.timer = null; }
+        container.querySelectorAll('.h5p-memory-card').forEach(function(c) {
+            c.classList.remove('flipped', 'matched');
+            c.setAttribute('tabindex', '0');
+        });
+        state.found = 0;
+        state.flips = 0;
+        state.seconds = 0;
+        state.opened = [];
+        state.done = false;
+        container.querySelector('.h5p-memory-timer').textContent = '00:00:00';
+        container.querySelector('.h5p-memory-counter').textContent = '0';
+        var done = container.querySelector('.h5p-memory-done');
+        if (done) done.style.display = 'none';
+        closeMemoryPopup(containerId);
+        initMemoryGame(containerId);
+    }
+
+    // H5P ImageMultipleHotspotQuestion — trouver les zones
+    // Le clic est ramené en POURCENTAGES de l'image, seul repère commun avec les zones
+    // (qui sont stockées en %). x/y d'une zone = son coin haut-gauche.
+    window.fmhState = window.fmhState || {};
+
+    function fmhZoneTouchee(zone, px, py) {
+        if (zone.figure === 'rectangle') {
+            return px >= zone.x && px <= zone.x + zone.w && py >= zone.y && py <= zone.y + zone.h;
         }
-        container.querySelector('.h5p-memory-score').textContent = '0';
-        memoryFlipped = [];
-        memoryLocked = false;
+        var rx = zone.w / 2, ry = zone.h / 2;
+        var dx = (px - (zone.x + rx)) / (rx || 1);
+        var dy = (py - (zone.y + ry)) / (ry || 1);
+        return dx * dx + dy * dy <= 1;
+    }
+
+    function fmhClick(event, containerId) {
+        var container = document.getElementById(containerId);
+        var state = window.fmhState[containerId];
+        if (!container || !state) return;
+        var img = container.querySelector('.h5p-fmh-image img');
+        if (!img) return;
+
+        var r = img.getBoundingClientRect();
+        var px = ((event.clientX - r.left) / r.width) * 100;
+        var py = ((event.clientY - r.top) / r.height) * 100;
+
+        // La zone la plus petite gagne : des zones peuvent se chevaucher
+        var cible = -1, aire = Infinity;
+        for (var i = 0; i < state.zones.length; i++) {
+            if (!fmhZoneTouchee(state.zones[i], px, py)) continue;
+            var a = state.zones[i].w * state.zones[i].h;
+            if (a < aire) { aire = a; cible = i; }
+        }
+
+        if (cible >= 0 && state.zones[cible].correct) {
+            if (state.trouvees.indexOf(cible) !== -1) return;   // déjà trouvée
+            state.trouvees.push(cible);
+            fmhMarque(container, state.zones[cible], true);
+            fmhMajScore(container, state);
+            fmhFeedback(container, state.zones[cible].feedback, true);
+        } else {
+            var z = cible >= 0 ? state.zones[cible] : { x: px - 3, y: py - 4.5, w: 6, h: 9, figure: 'circle' };
+            fmhMarque(container, z, false);
+            fmhFeedback(container, cible >= 0 ? state.zones[cible].feedback : '', false);
+        }
+    }
+
+    function fmhMarque(container, zone, juste) {
+        var couche = container.querySelector('.h5p-fmh-marques');
+        if (!couche) return;
+        var el = document.createElement('span');
+        el.className = 'h5p-fmh-marque ' + (juste ? 'juste' : 'faux');
+        el.style.left = zone.x + '%';
+        el.style.top = zone.y + '%';
+        el.style.width = zone.w + '%';
+        el.style.height = zone.h + '%';
+        // Le symbole est dimensionné en pixels d'après la taille RÉELLE de la zone à
+        // l'écran : les zones sont en %, leur taille dépend donc de l'affichage.
+        var img = container.querySelector('.h5p-fmh-image img');
+        var hPx = img ? img.getBoundingClientRect().height * zone.h / 100 : 24;
+        el.style.fontSize = Math.max(11, Math.min(28, Math.round(hPx * 0.62))) + 'px';
+        el.textContent = juste ? '✓' : '✕';
+        couche.appendChild(el);
+        if (!juste) setTimeout(function() { el.remove(); }, 1600);
+    }
+
+    function fmhMajScore(container, state) {
+        var n = state.trouvees.length;
+        var pct = state.total ? Math.round((n / state.total) * 100) : 0;
+        var fill = container.querySelector('.h5p-fmh-jauge-fill');
+        if (fill) fill.style.width = pct + '%';
+        var sc = container.querySelector('.h5p-fmh-trouvees');
+        if (sc) sc.textContent = n;
+        var etoile = container.querySelector('.h5p-fmh-etoile');
+        if (etoile) etoile.classList.toggle('complet', n >= state.total && state.total > 0);
+    }
+
+    function fmhFeedback(container, texte, juste) {
+        var el = container.querySelector('.h5p-fmh-feedback');
+        if (!el) return;
+        if (!texte) { el.style.display = 'none'; return; }
+        el.textContent = texte;
+        el.classList.toggle('faux', !juste);
+        el.style.display = 'block';
+    }
+
+    // H5P ImageSequencing — remettre les images dans l'ordre
+    // Les cartes sont émises dans l'ordre solution (data-solution) puis mélangées à l'affichage,
+    // comme le fait Éléa. Réordonner se fait au glisser-déposer (souris) ou en tapant deux
+    // cartes l'une après l'autre (tablette).
+    function initImageSequencing(containerId) {
+        var container = document.getElementById(containerId);
+        var state = window.imageSeqState[containerId];
+        if (!container || !state || container.dataset.init) return;
+        container.dataset.init = '1';
+
+        var wrap = container.querySelector('.h5p-is-cards');
+        var cards = Array.prototype.slice.call(wrap.children);
+        if (cards.length > 1) {
+            // Mélanger, en évitant de retomber sur l'ordre solution
+            var shuffled, guard = 0;
+            do {
+                shuffled = cards.slice();
+                for (var i = shuffled.length - 1; i > 0; i--) {
+                    var j = Math.floor(Math.random() * (i + 1));
+                    var t = shuffled[i]; shuffled[i] = shuffled[j]; shuffled[j] = t;
+                }
+                guard++;
+            } while (guard < 20 && isOrderIsSolution(shuffled));
+            shuffled.forEach(function(c) { wrap.appendChild(c); });
+        }
+
+        state.timer = setInterval(function() {
+            state.seconds++;
+            var el = container.querySelector('.h5p-is-time');
+            if (el) el.textContent = Math.floor(state.seconds / 60) + ':' + ('0' + (state.seconds % 60)).slice(-2);
+        }, 1000);
+    }
+
+    function isOrderIsSolution(cards) {
+        for (var i = 0; i < cards.length; i++) {
+            if (parseInt(cards[i].dataset.solution, 10) !== i) return false;
+        }
+        return true;
+    }
+
+    var _isDrag = null;
+
+    function isDragStart(event, containerId, solutionIdx) {
+        var state = window.imageSeqState[containerId];
+        if (state && state.done) { event.preventDefault(); return; }
+        _isDrag = { containerId: containerId, card: event.currentTarget };
+        event.currentTarget.classList.add('dragging');
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(solutionIdx));
+    }
+
+    function isDragOver(event) {
+        if (!_isDrag) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        var target = event.currentTarget;
+        if (target !== _isDrag.card) target.classList.add('drop-target');
+    }
+
+    function isDrop(event, containerId) {
+        event.preventDefault();
+        if (!_isDrag || _isDrag.containerId !== containerId) return;
+        var target = event.currentTarget;
+        target.classList.remove('drop-target');
+        isSwapCards(containerId, _isDrag.card, target);
+    }
+
+    function isDragEnd(event) {
+        event.currentTarget.classList.remove('dragging');
+        var container = event.currentTarget.closest('.h5p-imageseq');
+        if (container) {
+            container.querySelectorAll('.drop-target').forEach(function(c) { c.classList.remove('drop-target'); });
+        }
+        _isDrag = null;
+    }
+
+    // Tablette : première tape = sélection, seconde tape = échange
+    function isTapCard(containerId, solutionIdx) {
+        var container = document.getElementById(containerId);
+        var state = window.imageSeqState[containerId];
+        if (!container || !state || state.done) return;
+        var card = container.querySelector('.h5p-is-card[data-solution="' + solutionIdx + '"]');
+        if (!card) return;
+
+        if (!state.selected) {
+            state.selected = card;
+            card.classList.add('selected');
+            return;
+        }
+        var first = state.selected;
+        first.classList.remove('selected');
+        state.selected = null;
+        if (first !== card) isSwapCards(containerId, first, card);
+    }
+
+    function isSwapCards(containerId, a, b) {
+        if (!a || !b || a === b) return;
+        var state = window.imageSeqState[containerId];
+        var container = document.getElementById(containerId);
+        var wrap = container.querySelector('.h5p-is-cards');
+
+        // Échange de position dans le flux
+        var aNext = a.nextSibling === b ? a : a.nextSibling;
+        wrap.insertBefore(a, b);
+        wrap.insertBefore(b, aNext);
+
+        state.moves++;
+        var movesEl = container.querySelector('.h5p-is-moves');
+        if (movesEl) movesEl.textContent = state.moves;
+    }
+
+    function isCheckOrder(containerId) {
+        var container = document.getElementById(containerId);
+        var state = window.imageSeqState[containerId];
+        if (!container || !state) return;
+
+        var cards = container.querySelectorAll('.h5p-is-card');
+        var score = 0;
+        cards.forEach(function(card, i) {
+            var ok = parseInt(card.dataset.solution, 10) === i;
+            card.classList.remove('correct', 'wrong', 'selected');
+            card.classList.add(ok ? 'correct' : 'wrong');
+            if (ok) score++;
+        });
+
+        // « Afficher la solution » reste offert après une vérification, comme dans H5P
+        isFinish(containerId, score, false);
+    }
+
+    function isShowSolution(containerId) {
+        var container = document.getElementById(containerId);
+        var state = window.imageSeqState[containerId];
+        if (!container || !state) return;
+
+        var wrap = container.querySelector('.h5p-is-cards');
+        var cards = Array.prototype.slice.call(wrap.children);
+        cards.sort(function(x, y) {
+            return parseInt(x.dataset.solution, 10) - parseInt(y.dataset.solution, 10);
+        });
+        cards.forEach(function(c) {
+            c.classList.remove('wrong', 'selected');
+            c.classList.add('correct');
+            wrap.appendChild(c);
+        });
+
+        isFinish(containerId, state.total, true);
+    }
+
+    function isFinish(containerId, score, hideSolution) {
+        var container = document.getElementById(containerId);
+        var state = window.imageSeqState[containerId];
+        state.done = true;
+        state.selected = null;
+        if (state.timer) { clearInterval(state.timer); state.timer = null; }
+
+        container.querySelectorAll('.h5p-is-card').forEach(function(c) { c.setAttribute('draggable', 'false'); });
+
+        var feedback = container.querySelector('.h5p-is-feedback');
+        if (feedback) {
+            feedback.textContent = state.scoreText.replace('@score', score).replace('@total', state.total);
+            feedback.style.display = 'block';
+        }
+        var check = container.querySelector('.h5p-is-check');
+        if (check) check.disabled = true;
+        var sol = container.querySelector('.h5p-is-solution');
+        if (sol && hideSolution) sol.style.display = 'none';
+        var retry = container.querySelector('.h5p-is-retry');
+        if (retry) retry.style.display = '';
+    }
+
+    function isRetry(containerId) {
+        var container = document.getElementById(containerId);
+        var state = window.imageSeqState[containerId];
+        if (!container || !state) return;
+
+        container.querySelectorAll('.h5p-is-card').forEach(function(c) {
+            c.classList.remove('correct', 'wrong', 'selected');
+            c.setAttribute('draggable', 'true');
+        });
+        var feedback = container.querySelector('.h5p-is-feedback');
+        if (feedback) { feedback.style.display = 'none'; feedback.textContent = ''; }
+        var check = container.querySelector('.h5p-is-check');
+        if (check) check.disabled = false;
+        var sol = container.querySelector('.h5p-is-solution');
+        if (sol) sol.style.display = '';
+        var retry = container.querySelector('.h5p-is-retry');
+        if (retry) retry.style.display = 'none';
+
+        state.done = false;
+        state.selected = null;
+        state.moves = 0;
+        state.seconds = 0;
+        container.querySelector('.h5p-is-moves').textContent = '0';
+        container.querySelector('.h5p-is-time').textContent = '0:00';
+        delete container.dataset.init;
+        initImageSequencing(containerId);
     }
 
     // H5P Game Map
+    // Comme dans Éléa : une étape ouverte devient « franchie » (vert + étoile), ses voisines
+    // se déverrouillent (couleur d'étape, sans icône) et les chemins concernés passent au vert.
     function openGameMapStep(containerId, stepIdx) {
         var container = document.getElementById(containerId);
+        if (!container) return;
         var stepEl = container.querySelector('.h5p-gamemap-step[data-step="' + stepIdx + '"]');
-        
-        // Vérifier si le point est verrouillé
+
         if (stepEl && stepEl.dataset.locked === 'true') {
-            // Afficher un message
             stepEl.style.animation = 'shake 0.3s';
             setTimeout(function() { stepEl.style.animation = ''; }, 300);
             return;
         }
-        
+
         var modal = document.getElementById(containerId + '-step-' + stepIdx);
-        if (modal) {
-            modal.style.display = 'flex';
-            
-            // Marquer l'étape comme complétée
-            var state = window.gameMapState[containerId];
-            if (state && !state.completed.has(stepIdx)) {
-                state.completed.add(stepIdx);
-                
-                // Mettre à jour le compteur
-                var completedEl = container.querySelector('.h5p-gamemap-completed');
-                if (completedEl) {
-                    completedEl.textContent = state.completed.size;
-                }
-                
-                // Marquer visuellement l'étape
-                if (stepEl) {
-                    stepEl.classList.add('completed');
-                    stepEl.classList.remove('locked');
-                    stepEl.dataset.locked = 'false';
-                    // Mettre à jour l'icône
-                    var iconEl = stepEl.querySelector('.h5p-gamemap-step-icon');
-                    if (iconEl) {
-                        if (stepEl.classList.contains('final')) {
-                            iconEl.textContent = '✓';
-                        } else {
-                            iconEl.textContent = '✓';
-                        }
-                    }
-                }
-                
-                // Débloquer les voisins
-                var neighbors = JSON.parse(stepEl.dataset.neighbors || '[]');
-                neighbors.forEach(function(neighborIdx) {
-                    var neighborEl = container.querySelector('.h5p-gamemap-step[data-step="' + neighborIdx + '"]');
-                    if (neighborEl && neighborEl.dataset.locked === 'true') {
-                        neighborEl.classList.remove('locked');
-                        neighborEl.dataset.locked = 'false';
-                        // Mettre à jour l'icône
-                        var neighborIcon = neighborEl.querySelector('.h5p-gamemap-step-icon');
-                        if (neighborIcon) {
-                            if (neighborEl.classList.contains('final')) {
-                                neighborIcon.textContent = '🏁';
-                            } else {
-                                neighborIcon.textContent = parseInt(neighborIdx) + 1;
-                            }
-                        }
-                    }
-                });
-                
-                // Activer les chemins connectés
-                var paths = container.querySelectorAll('.h5p-gamemap-path');
-                paths.forEach(function(path) {
-                    var from = parseInt(path.dataset.from);
-                    var to = parseInt(path.dataset.to);
-                    if (state.completed.has(from) || state.completed.has(to)) {
-                        path.classList.add('active');
-                    }
-                });
-            }
+        if (!modal) return;
+        modal.style.display = 'flex';
+
+        var state = window.gameMapState[containerId];
+        if (!state || state.completed.indexOf(stepIdx) !== -1) return;
+        state.completed.push(stepIdx);
+
+        var completedEl = container.querySelector('.h5p-gamemap-completed');
+        if (completedEl) completedEl.textContent = state.completed.length;
+
+        if (stepEl) {
+            stepEl.classList.add('completed');
+            stepEl.classList.remove('locked');
+            stepEl.dataset.locked = 'false';
+            var iconEl = stepEl.querySelector('.h5p-gamemap-step-icon');
+            if (iconEl) iconEl.innerHTML = state.starIcon || '';
         }
+
+        var neighbors = JSON.parse((stepEl && stepEl.dataset.neighbors) || '[]');
+        neighbors.forEach(function(neighborIdx) {
+            var neighborEl = container.querySelector('.h5p-gamemap-step[data-step="' + parseInt(neighborIdx, 10) + '"]');
+            if (neighborEl && neighborEl.dataset.locked === 'true') {
+                neighborEl.classList.remove('locked');
+                neighborEl.dataset.locked = 'false';
+                var neighborIcon = neighborEl.querySelector('.h5p-gamemap-step-icon');
+                if (neighborIcon) neighborIcon.innerHTML = '';
+            }
+        });
+
+        container.querySelectorAll('.h5p-gamemap-path').forEach(function(path) {
+            var from = parseInt(path.dataset.from, 10);
+            var to = parseInt(path.dataset.to, 10);
+            if (state.completed.indexOf(from) !== -1 || state.completed.indexOf(to) !== -1) {
+                path.classList.add('active');
+            }
+        });
     }
-    
+
     function closeGameMapStep(containerId, stepIdx) {
         var modal = document.getElementById(containerId + '-step-' + stepIdx);
         if (modal) {
@@ -4443,11 +5108,16 @@ foreach ($sections as $sIndex => $section) {
             // Convertir toutes les images en data URL pour éliminer les requêtes réseau
             var imgList = Array.from(document.querySelectorAll('img[src]'));
             
-            // Phase 1: Attendre le chargement de toutes les images EN PARALLÈLE (max 3s)
+            // Phase 1: Attendre le chargement de toutes les images EN PARALLÈLE
+            // Les images du lecteur sont en `loading="lazy"` (voir CourseRenderer::deferImages) :
+            // celles des activités jamais ouvertes n'ont pas encore été téléchargées. On les
+            // repasse en `eager` ICI pour forcer le chargement, sinon elles arriveraient
+            // vides dans le PDF. Délai large : c'est le seul moment où tout part d'un coup.
             document.getElementById('pdfStatus').textContent = 'Chargement des images...';
+            imgList.forEach(function(img) { img.loading = 'eager'; });
             await Promise.all(imgList.map(function(img) {
                 if (img.src.startsWith('data:') || img.complete) return Promise.resolve();
-                return new Promise(function(r) { img.onload = r; img.onerror = r; setTimeout(r, 3000); });
+                return new Promise(function(r) { img.onload = r; img.onerror = r; setTimeout(r, 15000); });
             }));
             
             // Phase 2: Convertir chaque image en data URL (instantané, pas de réseau)

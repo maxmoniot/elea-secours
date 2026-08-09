@@ -116,7 +116,7 @@ function renderTree() {
                     <span class="tree-section-name" onclick="event.stopPropagation(); startEditSectionName('${section.id}', this)">${escapeHtml(section.name)}</span>
                     <div class="tree-section-actions">
                         <button class="tree-action-btn tree-vis-btn${sectionHidden ? ' vis-off' : ''}" onclick="event.stopPropagation(); toggleSectionVisibility('${section.id}')" title="${sectionHidden ? 'Afficher la section' : 'Masquer la section'}">${sectionHidden ? '🙈' : '👁️'}</button>
-                        <button class="tree-action-btn" onclick="event.stopPropagation(); toggleSectionCollapse('${section.id}')" title="Réduire/Développer">▼</button>
+                        <button class="tree-action-btn tree-collapse-btn" onclick="event.stopPropagation(); toggleSectionCollapse('${section.id}')" title="Réduire/Développer"><span class="tree-caret">▼</span></button>
                         <button class="tree-action-btn" onclick="event.stopPropagation(); deleteSection('${section.id}')" title="Supprimer">🗑️</button>
                     </div>
                 </div>
@@ -862,6 +862,10 @@ function getActivityIcon(type) {
         'resource': '📎',
         'ThreeImage': '🌐',
         'MultiMediaChoice': '🖼️',
+        'GameMap': '🧭',
+        'ImageSequencing': '🔢',
+        'MemoryGame': '🧠',
+        'ImageMultipleHotspotQuestion': '🔎',
         'quiz': '📋',
         'ddimageortext': '🎯',
         'h5pactivity': '🎮'
@@ -895,8 +899,16 @@ function selectSection(sectionId) {
 
 function toggleSectionCollapse(sectionId) {
     const section = courseData.sections.find(s => s.id === sectionId);
-    if (section) {
-        section.collapsed = !section.collapsed;
+    if (!section) return;
+    section.collapsed = !section.collapsed;
+
+    // Basculer la classe sur l'élément existant plutôt que reconstruire l'arborescence :
+    // un élément recréé apparaîtrait déjà pivoté, la transition CSS ne jouerait jamais.
+    // Bonus : le volet ne clignote plus et garde sa position de défilement.
+    const el = document.querySelector(`.tree-section[data-id="${sectionId}"]`);
+    if (el) {
+        el.classList.toggle('collapsed', !!section.collapsed);
+    } else {
         renderTree();
     }
 }
@@ -997,7 +1009,11 @@ function confirmAddActivity() {
         'dragtext': 'DragText',
         'findthewords': 'FindTheWords',
         'threeimage': 'ThreeImage',
-        'multimediachoice': 'MultiMediaChoice'
+        'multimediachoice': 'MultiMediaChoice',
+        'gamemap': 'GameMap',
+        'imagesequencing': 'ImageSequencing',
+        'memorygame': 'MemoryGame',
+        'multihotspot': 'ImageMultipleHotspotQuestion'
     };
     
     let activity;
@@ -1087,6 +1103,10 @@ function getActivityDefaultName(type) {
         'FindTheWords': 'Nouveaux mots mêlés',
         'ThreeImage': 'Nouvelle visite 360',
         'MultiMediaChoice': 'Nouveau choix multimédia',
+        'GameMap': 'Nouvelle carte à explorer',
+        'ImageSequencing': 'Nouvelle remise en ordre',
+        'MemoryGame': 'Nouveau memory',
+        'ImageMultipleHotspotQuestion': 'Nouvelles zones à trouver',
         'mapmodules': 'Carte de progression',
         'assign': 'Nouveau travail à déposer',
         'resource': 'Nouveaux fichiers à distribuer',
@@ -1171,6 +1191,55 @@ function getActivityDefaultContent(type) {
             return {
                 wordList: '',
                 taskDescription: 'Retrouvez les mots dans la grille'
+            };
+        case 'ImageSequencing':
+            return {
+                taskDescription: '',
+                sequenceImages: [],
+                behaviour: { enableSolution: true, enableRetry: true, enableResume: true }
+            };
+        case 'ImageMultipleHotspotQuestion':
+            // Zones à trouver : x/y/width/height en POURCENTAGES de l'image de fond,
+            // x/y = coin haut-gauche (format relevé sur un export Éléa réel).
+            return {
+                imageMultipleHotspotQuestion: {
+                    backgroundImageSettings: { questionTitle: 'Image hotspot question' },
+                    hotspotSettings: { hotspot: [] }
+                }
+            };
+        case 'MemoryGame':
+            // Une entrée de `cards` = UNE paire. l10n en français, comme les cours Éléa de Max.
+            return {
+                cards: [],
+                behaviour: { useGrid: true, allowRetry: true },
+                lookNFeel: { themeColor: '#707070' },
+                l10n: {
+                    cardTurns: 'Cartes retournées :',
+                    timeSpent: 'Temps écoulé :',
+                    feedback: 'Bien joué !',
+                    tryAgain: 'Réessayer',
+                    closeLabel: 'Fermer',
+                    label: 'Jeu de mémoire. Trouver les cartes qui se correspondent.',
+                    done: 'Toutes les cartes ont été trouvées.',
+                    cardPrefix: 'Carte %num sur %total:',
+                    cardUnturned: 'Non retournées. Click to turn.',
+                    cardTurned: 'Turned.',
+                    cardMatched: 'Correspondance trouvée.',
+                    cardMatchedA11y: 'Your cards match!',
+                    cardNotMatchedA11y: 'Your chosen cards do not match. Turn other cards to try again.'
+                }
+            };
+        case 'GameMap':
+            return {
+                gamemapSteps: {
+                    backgroundImageSettings: {},
+                    gamemap: { elements: [] }
+                },
+                behaviour: {
+                    enableRetry: true,
+                    enableSolutionsButton: true,
+                    map: { showLabels: true, roaming: 'complete', fog: 'all' }
+                }
             };
         case 'ThreeImage':
             return {
@@ -1424,6 +1493,18 @@ function renderActivityEditor() {
             break;
         case 'ThreeImage':
             renderThreeImageEditor(activity);
+            break;
+        case 'GameMap':
+            renderGameMapEditor(activity);
+            break;
+        case 'ImageSequencing':
+            renderImageSequencingEditor(activity);
+            break;
+        case 'MemoryGame':
+            renderMemoryGameEditor(activity);
+            break;
+        case 'ImageMultipleHotspotQuestion':
+            renderMultiHotspotEditor(activity);
             break;
         default:
             renderGenericEditor(activity, section);
@@ -2235,7 +2316,7 @@ function renderStructureView() {
         
         activities.forEach((activity, aIdx) => {
             const icon = getActivityIcon(['assign','resource','mapmodules'].includes(activity.type) ? activity.type : (activity.quizType || activity.h5pType || activity.type));
-            const typeLabel = activity.type === 'mapmodules' ? 'Carte de Progression' : (activity.type === 'assign' ? 'Travail à déposer' : (activity.type === 'resource' ? 'Fichiers à distribuer' : (activity.quizType === 'ddimageortext' ? 'Glisser Image' : (activity.h5pType === 'CoursePresentation' ? 'Parcours' : (activity.h5pType === 'ThreeImage' ? 'Visite 360' : (activity.h5pType || activity.type))))));
+            const typeLabel = activity.type === 'mapmodules' ? 'Carte de Progression' : (activity.type === 'assign' ? 'Travail à déposer' : (activity.type === 'resource' ? 'Fichiers à distribuer' : (activity.quizType === 'ddimageortext' ? 'Glisser Image' : (activity.h5pType === 'CoursePresentation' ? 'Parcours' : (activity.h5pType === 'ThreeImage' ? 'Visite 360' : (activity.h5pType === 'GameMap' ? 'Carte à explorer' : (activity.h5pType === 'ImageSequencing' ? 'Remettre dans l\'ordre' : (activity.h5pType === 'MemoryGame' ? 'Memory' : (activity.h5pType === 'ImageMultipleHotspotQuestion' ? 'Trouver les zones' : (activity.h5pType || activity.type))))))))));
             const actHidden = activity.visible === false || secHidden;
             const actOwnHidden = activity.visible === false;
             const actDimStyle = actHidden ? ' style="opacity: 0.45;"' : '';

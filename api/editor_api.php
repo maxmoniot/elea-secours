@@ -59,6 +59,14 @@ require_once __DIR__ . '/../includes/session_check.php';
 // modèle sans authentification que file_drive.php (viewer). Tout le reste reste gaté.
 if (($_GET['action'] ?? '') === 'serve_upload') {
     $editorSessionId = $_SESSION['editor_session_id'] ?? '';
+    // Libérer le verrou de session AVANT de servir : PHP verrouille le fichier de session
+    // pendant toute la requête, donc sans ça les médias d'un même cours se servent les uns
+    // APRÈS les autres, et bloquent en plus toutes les autres requêtes de l'éditeur.
+    // C'est invisible tant que les fichiers sont sur le serveur (lecture disque, quelques ms),
+    // mais dès qu'ils sont partis sur le Drive chaque image coûte un téléchargement OAuth :
+    // 20 images = plusieurs dizaines de secondes de file d'attente, et la page reste sans
+    // images. serveUpload() ne fait que LIRE l'identifiant ci-dessus, jamais écrire.
+    session_write_close();
     serveUpload();
     exit;
 }
@@ -206,6 +214,10 @@ try {
             loadCpTemplate($input);
             break;
         
+        case 'get_progress':
+            getProgress();
+            break;
+
         case 'get_file_sizes':
             getFileSizes($input);
             break;
@@ -333,9 +345,22 @@ function saveDraft($input, $draftsDir) {
     $data['id'] = $id;
     $data['savedAt'] = date('c');
     
-    // Sauvegarder le fichier JSON
+    // Sauvegarder le fichier JSON — écriture atomique (une écriture interrompue
+    // laisserait un brouillon tronqué, donc un cours illisible).
     $filepath = $draftsDir . '/' . $id . '.json';
-    if (file_put_contents($filepath, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE))) {
+    $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+    $ecrit = false;
+    if ($json !== false && $json !== '') {
+        $tmp = $filepath . '.tmp' . getmypid();
+        if (@file_put_contents($tmp, $json) === strlen($json)) {
+            for ($essai = 0; $essai < 4 && !$ecrit; $essai++) {
+                $ecrit = @rename($tmp, $filepath);
+                if (!$ecrit) usleep(30000);
+            }
+        }
+        if (!$ecrit) @unlink($tmp);
+    }
+    if ($ecrit) {
         echo json_encode([
             'success' => true,
             'id' => $id,
@@ -447,12 +472,31 @@ function autoSaveDraft($input, $draftsDir) {
     $_SESSION['editor_session_id'] = $safeSessionId;
     session_write_close(); // Libérer le verrou immédiatement
     
-    // Sauvegarder le fichier
+    // Sauvegarder le fichier — écriture ATOMIQUE (temporaire + rename) et conservation
+    // de la version précédente. Le brouillon fait plusieurs centaines de Ko et il est
+    // réécrit sans arrêt : une écriture interrompue (timeout du mutualisé, onglet fermé)
+    // laissait un JSON tronqué, c'est-à-dire un cours entier illisible.
     $filepath = $autoDraftsDir . '/' . $safeSessionId . '.json';
     $data['savedAt'] = date('c');
     $data['sessionId'] = $safeSessionId;
-    
-    if (file_put_contents($filepath, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE))) {
+
+    $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+    $ecrit = false;
+    if ($json !== false && $json !== '') {
+        $tmp = $filepath . '.tmp' . getmypid();
+        if (@file_put_contents($tmp, $json) === strlen($json)) {
+            if (is_file($filepath) && filesize($filepath) > 50) {
+                @copy($filepath, $filepath . '.prev');
+            }
+            for ($essai = 0; $essai < 4 && !$ecrit; $essai++) {
+                $ecrit = @rename($tmp, $filepath);
+                if (!$ecrit) usleep(30000);
+            }
+        }
+        if (!$ecrit) @unlink($tmp);
+    }
+
+    if ($ecrit) {
         // Mettre à jour la session EditorDriveSync (timestamp + nom uniquement)
         require_once __DIR__ . '/../includes/EditorDriveSync.php';
         EditorDriveSync::touchSession($safeSessionId, $data['name'] ?? '');
@@ -481,13 +525,22 @@ function loadAutoDraft($input, $draftsDir) {
     $safeSessionId = preg_replace('/[^a-zA-Z0-9_-]/', '', $sessionId);
     
     $filepath = $draftsDir . '/auto/' . $safeSessionId . '.json';
-    
+
     if (!file_exists($filepath)) {
         echo json_encode(['success' => false, 'message' => 'Pas de brouillon trouvé']);
         return;
     }
-    
-    $data = json_decode(file_get_contents($filepath), true);
+
+    $data = json_decode(@file_get_contents($filepath), true);
+    // Brouillon illisible : reprendre la version précédente plutôt que de rendre une
+    // erreur (le professeur perdrait tout le cours). Écart maxi = un cycle d'autosave.
+    if (!is_array($data) && is_file($filepath . '.prev')) {
+        $data = json_decode(@file_get_contents($filepath . '.prev'), true);
+        if (is_array($data)) {
+            error_log("loadAutoDraft: brouillon illisible pour $safeSessionId — version précédente restaurée");
+            @copy($filepath . '.prev', $filepath);
+        }
+    }
     if ($data) {
         // === Migration des anciens drafts ===
         if (!empty($data['sections'])) {
@@ -755,6 +808,14 @@ function exportElea($input) {
         $logProgress('Creating exporter, sessionId=' . $sessionId);
         $t0 = microtime(true);
         $exporter = new EleaMbzExporter($data, $sessionId);
+        // Barre de progression de l'éditeur : l'exporteur publie son avancement, le
+        // navigateur l'interroge en parallèle via l'action get_progress.
+        $progressId = $input['progressId'] ?? '';
+        if ($progressId !== '') {
+            $exporter->setProgressCallback(function ($percent, $label) use ($progressId) {
+                progressSet($progressId, $percent, $label);
+            });
+        }
         $t1 = microtime(true);
         $logProgress('Exporter created in ' . round(($t1-$t0)*1000) . 'ms, calling export()');
         
@@ -776,11 +837,19 @@ function exportElea($input) {
         $mbzSize = file_exists($mbzPath) ? filesize($mbzPath) : 0;
         
         $logProgress('SUCCESS size=' . round($mbzSize/1024) . 'Ko manifest=' . count($exporter->getFilesManifest()));
+        if ($progressId !== '') progressClear($progressId);
         
         echo json_encode([
             'success' => true,
             'downloadUrl' => $downloadUrl,
             'filename' => $filename,
+            // Activités que l'exporteur n'a pas su traduire : à signaler au professeur,
+            // sinon elles disparaissent du .mbz sans qu'il le sache.
+            'droppedActivities' => $exporter->getDroppedActivities(),
+            // Médias référencés mais introuvables partout (local, Drive toutes sessions) :
+            // le .mbz est incomplet pour eux — le professeur doit le savoir AVANT
+            // d'importer sur Éléa (constaté le 07/08/2026 : 7 médias perdus en silence).
+            'unresolvedFiles' => $exporter->getUnresolvedFiles(),
             '_debug' => [
                 'init_ms' => round(($t1 - $t0) * 1000),
                 'export_ms' => round(($t2 - $t1) * 1000),
@@ -793,6 +862,7 @@ function exportElea($input) {
         ]);
     } catch (\Throwable $e) {
         $logProgress('ERROR: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+        if (!empty($progressId)) progressClear($progressId);
         // Nettoyer drive_downloads même en cas d'erreur
         $dlDir = TMP_PATH . '/drive_downloads';
         if (is_dir($dlDir)) {
@@ -970,8 +1040,15 @@ function parseMbz() {
             mkdir($uploadDir, 0755, true);
         }
         
-        // Utiliser le MbzParser correctement
+        // Barre de progression de l'éditeur : le parser publie ses phases (0-70 %),
+        // la copie des fichiers et la conversion prennent la suite (70-100 %).
+        $progressId = $_POST['progressId'] ?? '';
         $parser = new MbzParser($tmpFile, $extractDir);
+        if ($progressId !== '') {
+            $parser->setProgressCallback(function ($percent, $label) use ($progressId) {
+                progressSet($progressId, $percent, $label);
+            });
+        }
         $courseData = $parser->parse();
         
         // Extraire les informations
@@ -985,31 +1062,42 @@ function parseMbz() {
         // Copier les fichiers et créer un mapping ancien chemin -> nouveau URL
         $fileMapping = [];
         $hashMapping = []; // hash -> {url, originalName}
+        $totalFichiers = count($mbzFiles);
+        $fichiersFaits = 0;
         foreach ($mbzFiles as $file) {
+            // Un point d'avancement tous les 5 fichiers : écrire à chaque fichier coûterait
+            // plus cher que la copie elle-même sur les petites images.
+            if ($progressId !== '' && ($fichiersFaits % 5) === 0) {
+                progressSet($progressId,
+                    $totalFichiers ? 72 + 22 * ($fichiersFaits / $totalFichiers) : 72,
+                    'Fichier ' . ($fichiersFaits + 1) . '/' . $totalFichiers . '…');
+            }
+            $fichiersFaits++;
+
             if (empty($file['hash']) || $file['filename'] === '.') continue;
-            
+
             // Chemin source dans l'archive extraite
             $prefix = substr($file['hash'], 0, 2);
             $srcPath = $extractDir . '/files/' . $prefix . '/' . $file['hash'];
-            
+
             if (!file_exists($srcPath)) continue;
-            
+
             // Générer un nouveau nom unique
             $ext = strtolower(pathinfo($file['filename'], PATHINFO_EXTENSION));
             if (empty($ext)) {
-                $extMap = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 
+                $extMap = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif',
                            'image/webp' => 'webp', 'video/mp4' => 'mp4'];
                 $ext = $extMap[$file['mimetype']] ?? 'bin';
             }
-            
+
             $newFilename = 'import_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
             $destPath = $uploadDir . '/' . $newFilename;
-            
+
             // Copier le fichier
             if (copy($srcPath, $destPath)) {
                 $newUrl = 'api/editor_api.php?action=serve_upload&file=' . urlencode($newFilename);
                 if ($safeSessionId) $newUrl .= '&session=' . urlencode($safeSessionId);
-                
+
                 // Mapping par hash (pour assign et lookups directs)
                 $hashMapping[$file['hash']] = ['url' => $newUrl, 'name' => $file['filename']];
                 
@@ -1032,6 +1120,7 @@ function parseMbz() {
         }
         
         // Convertir en format éditeur
+        if ($progressId !== '') progressSet($progressId, 95, 'Conversion du cours…');
         $editorSections = [];
         foreach ($sections as $section) {
             $editorSection = [
@@ -1041,10 +1130,10 @@ function parseMbz() {
                 'visible' => ($section['visible'] ?? 1) ? true : false,
                 'activities' => []
             ];
-            
+
             foreach ($section['activities'] ?? [] as $activity) {
                 $actType = $activity['type'] ?? 'hvp';
-                
+
                 // Carte de progression: pas un H5P, copier les champs spécifiques
                 if ($actType === 'mapmodules') {
                     // Détecter image personnalisée via le nom Éléa
@@ -1220,6 +1309,10 @@ function parseMbz() {
                     'type' => $activity['type'] ?? 'hvp',
                     'name' => $activity['name'] ?? 'Activité',
                     'h5pType' => $h5pType,
+                    // La consigne affichée AU-DESSUS de l'activité (champ `intro` de Moodle).
+                    // Sans elle, le « Dans le schéma ci-dessus, localisez… » d'un
+                    // Trouver-les-zones était perdu dès l'import, donc aussi à l'export.
+                    'intro' => resolvePluginfileUrls($activity['intro'] ?? '', $fileMapping),
                     'content' => $h5pContent
                 ];
                 $editorSection['activities'][] = $editorActivity;
@@ -1251,9 +1344,10 @@ function parseMbz() {
         }
         
         // Nettoyer le dossier temporaire
+        if ($progressId !== '') progressSet($progressId, 97, 'Finalisation…');
         deleteDirectory($extractDir);
-        
-        
+
+        if ($progressId !== '') progressClear($progressId);
         echo json_encode([
             'success' => true,
             'course' => [
@@ -1262,8 +1356,9 @@ function parseMbz() {
                 'sections' => $editorSections
             ],
         ]);
-        
+
     } catch (Exception $e) {
+        if (!empty($progressId)) progressClear($progressId);
         echo json_encode(['error' => 'Erreur de parsing: ' . $e->getMessage()]);
     }
     
@@ -1315,6 +1410,17 @@ function replaceFilePathsInContent($content, array $fileMapping) {
         foreach ($content as $key => $value) {
             // Cas spécial pour les chemins de fichiers H5P
             if ($key === 'path' && is_string($value)) {
+                // Une URL ABSOLUE (podeduc, YouTube, Vimeo…) ne désigne pas un fichier de
+                // l'archive : on n'y touche jamais. Sinon le repli « par nom de fichier »
+                // plus bas l'écrasait dès que le .mbz contenait un fichier homonyme — et
+                // comme cette fonction tourne à CHAQUE ouverture (parseLocalCourse), l'URL
+                // était perdue à chaque réouverture du parcours.
+                // Idem pour un fichier déjà servi par l'éditeur : rien à réécrire.
+                if (preg_match('#^(?:[a-z][a-z0-9+.-]*:)?//#i', $value)
+                    || strpos($value, 'api/editor_api.php') === 0) {
+                    continue;
+                }
+
                 // Enlever le suffixe #tmp si présent
                 $cleanPath = preg_replace('/#tmp$/', '', $value);
                 
@@ -1466,8 +1572,11 @@ function convertStandardQuizForEditor($activity, $fileMapping, $mbzFiles = [], $
         if ($qtype === 'multichoice') {
             $answers = [];
             foreach ($q['answers'] ?? [] as $a) {
+                // Le HTML est CONSERVÉ : une réponse de QCM peut contenir une image
+                // (Éléa l'écrit en <img src="@@PLUGINFILE@@/…"> dans answertext).
+                // strip_tags() vidait complètement ces réponses-là.
                 $answers[] = [
-                    'text'    => trim(strip_tags($a['text'] ?? '')),
+                    'text'    => trim(resolvePluginfileUrls($a['text'] ?? '', $fileMapping)),
                     'correct' => ($a['fraction'] ?? 0) > 0,
                 ];
             }
@@ -1855,6 +1964,62 @@ function getSessionFilesTotal($input) {
     ]);
 }
 
+// ==================== PROGRESSION DES TÂCHES LONGUES ====================
+// L'import et l'export durent parfois plusieurs dizaines de secondes. La tâche publie son
+// avancement dans un petit fichier ; le navigateur l'interroge en parallèle via get_progress.
+// Le verrou de session PHP est relâché plus haut pour toutes les actions sauf deux, donc ces
+// requêtes de suivi ne sont pas mises en attente derrière la tâche en cours.
+
+function progressPath($id): ?string {
+    $id = preg_replace('/[^a-zA-Z0-9_-]/', '', (string)$id);
+    if ($id === '') return null;
+    $dir = CACHE_DIR . '/progress';
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    return $dir . '/' . $id . '.json';
+}
+
+/**
+ * Publie l'avancement d'une tâche. $percent est borné à 0-100 et ne recule jamais :
+ * une barre qui repart en arrière est plus inquiétante qu'une barre lente.
+ */
+function progressSet($id, $percent, string $label): void {
+    $path = progressPath($id);
+    if (!$path) return;
+
+    $percent = max(0, min(100, (int)round($percent)));
+    if (file_exists($path)) {
+        $prev = json_decode(@file_get_contents($path), true);
+        if (isset($prev['percent']) && $prev['percent'] > $percent) $percent = (int)$prev['percent'];
+    } else {
+        progressSweep();   // premier appel de la tâche : purger les suivis abandonnés
+    }
+    @file_put_contents($path, json_encode([
+        'percent' => $percent,
+        'label'   => $label,
+        'at'      => time(),
+    ]), LOCK_EX);
+}
+
+function progressClear($id): void {
+    $path = progressPath($id);
+    if ($path) @unlink($path);
+}
+
+// Suivis laissés par un onglet fermé ou une tâche interrompue
+function progressSweep(): void {
+    $dir = CACHE_DIR . '/progress';
+    if (!is_dir($dir)) return;
+    foreach (glob($dir . '/*.json') ?: [] as $f) {
+        if (@filemtime($f) < time() - 3600) @unlink($f);
+    }
+}
+
+function getProgress(): void {
+    $path = progressPath($_GET['id'] ?? ($_POST['id'] ?? ''));
+    $data = ($path && file_exists($path)) ? json_decode(@file_get_contents($path), true) : null;
+    echo json_encode($data ?: ['percent' => null, 'label' => '']);
+}
+
 // Retourner les tailles de fichiers du dossier editor_uploads
 function getFileSizes($input) {
     // Accepte 'filenames' (noms directs) ou 'files' (URLs legacy)
@@ -1980,7 +2145,21 @@ function serveUpload() {
             $filepath = $flatPath;
         }
     }
-    
+
+    // Le fichier peut vivre dans le dossier d'une AUTRE session : session PHP expirée
+    // (plus de fallback $editorSessionId), brouillon repris dans une nouvelle session,
+    // URL sans paramètre session… Les noms (upload|import|tpl)_<ts>_<aléa>.<ext> sont
+    // uniques : une recherche par nom dans tous les dossiers de session est sûre.
+    // C'est ce qui rend les médias insensibles à la perte de session PHP (gc OVH).
+    if (!$filepath) {
+        foreach (glob(CACHE_DIR . '/editor_uploads/*/' . $filename) ?: [] as $candidate) {
+            if (is_file($candidate)) {
+                $filepath = $candidate;
+                break;
+            }
+        }
+    }
+
     // Pas trouvé localement → le fichier a été flushé sur Drive (EditorDriveSync supprime le
     // local après upload : le serveur doit rester vide, c'est voulu). Les fichiers Drive sont
     // PRIVÉS (aucune permission publique posée) : rediriger vers drive.google.com/uc ou lh3
@@ -1990,10 +2169,19 @@ function serveUpload() {
     // → Même modèle ici : téléchargement OAuth EN MÉMOIRE puis streaming direct au navigateur.
     //   RIEN n'est écrit sur le serveur. Le cache navigateur (ETag + 24h) évite les
     //   re-téléchargements Drive répétés.
-    if (!$filepath && $safeSessionId) {
+    if (!$filepath) {
         require_once __DIR__ . '/../includes/EditorDriveSync.php';
-        $meta = EditorDriveSync::getMeta($safeSessionId);
-        $driveId = $meta['file_mapping'][$filename] ?? null;
+        $driveId = null;
+        if ($safeSessionId) {
+            $meta = EditorDriveSync::getMeta($safeSessionId);
+            $driveId = $meta['file_mapping'][$filename] ?? null;
+        }
+        // Mapping introuvable dans la session indiquée (ou pas de session du tout) :
+        // chercher le nom dans les mappings de TOUTES les sessions actives — même
+        // logique inter-sessions que pour les fichiers locaux ci-dessus.
+        if (!$driveId) {
+            $driveId = EditorDriveSync::findDriveIdAnySession($filename);
+        }
         if ($driveId) {
             // ETag stable par fichier Drive : si le navigateur l'a déjà, 304 sans appel Drive
             $etag = '"' . md5($driveId) . '"';
@@ -2017,7 +2205,9 @@ function serveUpload() {
             }
 
             // Secours si le téléchargement OAuth a échoué : ancienne redirection (ne fonctionne
-            // que si le fichier est public, mais mieux qu'un 404 sec).
+            // que si le fichier est public, mais mieux qu'un 404 sec). Journalisé : si ce cas
+            // se produit en masse, c'est le téléchargement OAuth qu'il faut diagnostiquer.
+            error_log("serveUpload: OAuth KO pour $filename ($driveId) — redirection publique de secours (fichier privé : échouera probablement)");
             $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
             $imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'];
             if (in_array($ext, $imageExts)) {
@@ -2032,20 +2222,66 @@ function serveUpload() {
 
     if (!$filepath) {
         http_response_code(404);
+        // Trace de diagnostic : un 404 ici = fichier ni local (toutes sessions), ni dans
+        // aucun mapping Drive → contenu réellement perdu ou nom erroné dans courseData.
+        error_log("serveUpload 404: $filename (session='" . ($safeSessionId ?: 'aucune') . "') — introuvable partout");
         echo 'File not found';
         return;
     }
-    
+
     // Envoyer le fichier
+    $taille = filesize($filepath);
     header('Content-Type: ' . editorUploadMime($filename));
-    header('Content-Length: ' . filesize($filepath));
-    
+    header('Cache-Control: public, max-age=86400');
+
     if (!empty($_GET['download'])) {
         $downloadName = $_GET['download_name'] ?? $filename;
         header('Content-Disposition: attachment; filename="' . addslashes($downloadName) . '"');
     }
-    
-    header('Cache-Control: public, max-age=86400');
+
+    // Requêtes Range : indispensables pour SE DÉPLACER dans une vidéo ou un audio.
+    // Sans elles le navigateur lit bien le média mais ne peut pas y sauter : le curseur
+    // repart à 0 (vérifié en Chromium — lecture OK, seek à 3s → retour à 0).
+    header('Accept-Ranges: bytes');
+    $range = trim($_SERVER['HTTP_RANGE'] ?? '');
+    if ($range !== '' && preg_match('/^bytes=(\d*)-(\d*)$/', $range, $m) && $taille > 0) {
+        if ($m[1] === '') {
+            // « bytes=-N » : les N derniers octets
+            $longueur = min((int)$m[2], $taille);
+            $debut = $taille - $longueur;
+            $fin = $taille - 1;
+        } else {
+            $debut = (int)$m[1];
+            $fin = ($m[2] === '') ? $taille - 1 : min((int)$m[2], $taille - 1);
+        }
+
+        if ($debut > $fin || $debut >= $taille) {
+            http_response_code(416);
+            header('Content-Range: bytes */' . $taille);
+            exit;
+        }
+
+        $longueur = $fin - $debut + 1;
+        http_response_code(206);
+        header("Content-Range: bytes {$debut}-{$fin}/{$taille}");
+        header('Content-Length: ' . $longueur);
+
+        $fp = fopen($filepath, 'rb');
+        if ($fp) {
+            fseek($fp, $debut);
+            $reste = $longueur;
+            while ($reste > 0 && !feof($fp)) {
+                $bloc = fread($fp, (int)min(65536, $reste));
+                if ($bloc === false || $bloc === '') break;
+                echo $bloc;
+                $reste -= strlen($bloc);
+            }
+            fclose($fp);
+        }
+        exit;
+    }
+
+    header('Content-Length: ' . $taille);
     readfile($filepath);
     exit;
 }
@@ -2256,6 +2492,29 @@ function detectH5pType($activity) {
     if (isset($content['presentation']['slides'])) {
         return 'CoursePresentation';
     }
+    if (isset($content['gamemapSteps'])) {
+        return 'GameMap';
+    }
+    if (isset($content['sequenceImages'])) {
+        return 'ImageSequencing';
+    }
+    if (isset($content['imageMultipleHotspotQuestion'])) {
+        return 'ImageMultipleHotspotQuestion';
+    }
+    // H5P.MemoryGame : liste `cards` d'images. `cards` existe aussi dans Flashcards,
+    // mais avec question/answer/text sur chaque carte — d'où le garde-fou.
+    if (isset($content['cards']) && is_array($content['cards'])) {
+        $firstCard = $content['cards'][0] ?? null;
+        $looksMemory = isset($content['lookNFeel'])
+            || isset($content['behaviour']['useGrid'])
+            || (is_array($firstCard) && isset($firstCard['image'])
+                && !isset($firstCard['question'])
+                && !isset($firstCard['answer'])
+                && !isset($firstCard['text']));
+        if ($looksMemory) {
+            return 'MemoryGame';
+        }
+    }
     if (isset($content['threeImage']['scenes']) || isset($content['threeImage'])) {
         return 'ThreeImage';
     }
@@ -2305,7 +2564,11 @@ function detectH5pType($activity) {
     if (strpos($machineName, 'TrueFalse') !== false) return 'TrueFalse';
     if (strpos($machineName, 'Blanks') !== false) return 'Blanks';
     if (strpos($machineName, 'ThreeImage') !== false) return 'ThreeImage';
-    
+    if (strpos($machineName, 'GameMap') !== false) return 'GameMap';
+    if (strpos($machineName, 'ImageSequencing') !== false) return 'ImageSequencing';
+    if (strpos($machineName, 'MemoryGame') !== false) return 'MemoryGame';
+    if (strpos($machineName, 'ImageMultipleHotspotQuestion') !== false) return 'ImageMultipleHotspotQuestion';
+
     return $activity['type'] ?? 'unknown';
 }
 
@@ -2386,9 +2649,27 @@ class MbzExporter {
         
         // 3. Télécharger depuis Drive si on a un driveId
         if ($driveId) {
-            return $this->downloadDriveFile($driveId, $filename ?: ($driveId . '.bin'));
+            $dl = $this->downloadDriveFile($driveId, $filename ?: ($driveId . '.bin'));
+            if ($dl) return $dl;
         }
-        
+
+        // 4. Le fichier peut vivre dans le dossier local ou le mapping Drive d'une
+        // AUTRE session (brouillon repris, cours ré-importé). Les noms étant uniques,
+        // la recherche par nom est sûre — même logique que serve_upload et
+        // EleaMbzExporter::findFileMultiPath.
+        if ($filename) {
+            foreach (glob(CACHE_DIR . '/editor_uploads/*/' . $filename) ?: [] as $candidate) {
+                if (is_file($candidate)) return $candidate;
+            }
+            require_once __DIR__ . '/../includes/EditorDriveSync.php';
+            $anyId = EditorDriveSync::findDriveIdAnySession($filename);
+            if ($anyId && $anyId !== $driveId) {
+                $dl = $this->downloadDriveFile($anyId, $filename);
+                if ($dl) return $dl;
+            }
+            error_log("MbzExporter: fichier référencé INTROUVABLE partout : $filename — le .mbz sera incomplet");
+        }
+
         return null;
     }
     
@@ -2981,6 +3262,10 @@ class MbzExporter {
             'QuestionSet'        => ['major' => 1, 'minor' => 20],
             'ThreeImage'         => ['major' => 0, 'minor' => 5],
             'MultiMediaChoice'   => ['major' => 0, 'minor' => 3],
+            'GameMap'            => ['major' => 1, 'minor' => 2],
+            'ImageSequencing'    => ['major' => 1, 'minor' => 1],
+            'MemoryGame'         => ['major' => 1, 'minor' => 3],
+            'ImageMultipleHotspotQuestion' => ['major' => 1, 'minor' => 0],
         ];
         $version = $h5pVersions[$h5pType] ?? ['major' => 1, 'minor' => 0];
         
@@ -3448,9 +3733,10 @@ class MbzExporter {
         $introXml = '';
         if (!empty($intro)) {
             // Extraire et copier les images de l'intro, remplacer par @@PLUGINFILE@@/
-            // Pattern 1: URLs serve_upload
+            // Pattern 1: URLs serve_upload — tolère un param session avant/après file=
+            // et le consomme pour qu'il ne reste pas incrusté dans le HTML exporté.
             $introXml = preg_replace_callback(
-                '/(?:api\/editor_api\.php\?action=serve_upload&amp;file=|api\/editor_api\.php\?action=serve_upload&file=)([^"\'<>\s&]+)/',
+                '/api\/editor_api\.php\?action=serve_upload(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?&(?:amp;)?file=([^"\'<>\s&]+)(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?/',
                 function($m) use ($contextId, &$nextFileId) {
                     $encodedName = $m[1];
                     $localFile = $this->resolveFileToLocal('file=' . $encodedName);
@@ -3796,8 +4082,9 @@ class MbzExporter {
         $intro = $activity['intro'] ?? '';
         $introXml = '';
         if (!empty($intro)) {
+            // Tolère un param session avant/après file= et le consomme (cf. plus haut).
             $introXml = preg_replace_callback(
-                '/(?:api\/editor_api\.php\?action=serve_upload&amp;file=|api\/editor_api\.php\?action=serve_upload&file=)([^\"\'<>\s&]+)/',
+                '/api\/editor_api\.php\?action=serve_upload(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?&(?:amp;)?file=([^\"\'<>\s&]+)(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?/',
                 function($m) use ($contextId, &$nextFileId, &$fileIds) {
                     $encodedName = $m[1];
                     $localFile = $this->resolveFileToLocal('file=' . $encodedName);
@@ -4996,9 +5283,10 @@ class MbzExporter {
 
         $dotAdded = false;
 
-        // Pattern 1 : URLs serve_upload
+        // Pattern 1 : URLs serve_upload — tolère un param session avant/après file=
+        // et le consomme.
         $html = preg_replace_callback(
-            '/(?:api\/editor_api\.php\?action=serve_upload&amp;file=|api\/editor_api\.php\?action=serve_upload&file=)([^"\'<>\s&]+)/',
+            '/api\/editor_api\.php\?action=serve_upload(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?&(?:amp;)?file=([^"\'<>\s&]+)(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?/',
             function($m) use ($contextId, $questionId, &$dotAdded) {
                 $localFile = $this->resolveFileToLocal('file=' . $m[1]);
                 if (!$localFile || !file_exists($localFile)) return $m[0];
@@ -5386,14 +5674,21 @@ function parseDriveMbz($input) {
         require_once __DIR__ . '/../includes/MbzParser.php';
         
         $driveLoader = new GoogleDriveLoader();
-        
+
+        // Barre de progression de l'éditeur. Le téléchargement + la lecture se font dans
+        // GoogleDriveLoader (avec son propre cache) : on ne peut jalonner que ses bornes.
+        $progressId = $input['progressId'] ?? '';
+        if ($progressId !== '') progressSet($progressId, 5, 'Téléchargement depuis le Drive…');
+
         // Utiliser le cache partagé (viewer + éditeur)
         // Si le cours est déjà extrait sur le serveur, ça sera instantané
         $courseData = $driveLoader->loadAndParseCourse($gdriveId);
         if (!$courseData) {
+            if ($progressId !== '') progressClear($progressId);
             echo json_encode(['error' => 'Impossible de charger le cours depuis Google Drive']);
             return;
         }
+        if ($progressId !== '') progressSet($progressId, 60, 'Cours lu, copie des fichiers…');
         
         $extractDir = $courseData['tmp_path'] ?? '';
         $courseInfo = $courseData['course'] ?? [];
@@ -5414,21 +5709,30 @@ function parseDriveMbz($input) {
         // Copier les fichiers et créer un mapping ancien chemin -> nouveau URL
         $fileMapping = [];
         $hashMapping = []; // hash -> {url, originalName}
+        $totalFichiers = count($mbzFiles);
+        $fichiersFaits = 0;
         foreach ($mbzFiles as $file) {
+            if ($progressId !== '' && ($fichiersFaits % 5) === 0) {
+                progressSet($progressId,
+                    $totalFichiers ? 62 + 30 * ($fichiersFaits / $totalFichiers) : 62,
+                    'Fichier ' . ($fichiersFaits + 1) . '/' . $totalFichiers . '…');
+            }
+            $fichiersFaits++;
+
             if (empty($file['hash']) || $file['filename'] === '.') continue;
-            
+
             $prefix = substr($file['hash'], 0, 2);
             $srcPath = $extractDir . '/files/' . $prefix . '/' . $file['hash'];
-            
+
             if (!file_exists($srcPath)) continue;
-            
+
             $ext = strtolower(pathinfo($file['filename'], PATHINFO_EXTENSION));
             if (empty($ext)) {
-                $extMap = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 
+                $extMap = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif',
                            'image/webp' => 'webp', 'video/mp4' => 'mp4'];
                 $ext = $extMap[$file['mimetype']] ?? 'bin';
             }
-            
+
             $newFilename = 'import_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
             $destPath = $uploadDir . '/' . $newFilename;
             
@@ -5601,6 +5905,10 @@ function parseDriveMbz($input) {
                     'type' => $activity['type'] ?? 'hvp',
                     'name' => $activity['name'] ?? 'Activité',
                     'h5pType' => $h5pType,
+                    // La consigne affichée AU-DESSUS de l'activité (champ `intro` de Moodle).
+                    // Sans elle, le « Dans le schéma ci-dessus, localisez… » d'un
+                    // Trouver-les-zones était perdu dès l'import, donc aussi à l'export.
+                    'intro' => resolvePluginfileUrls($activity['intro'] ?? '', $fileMapping),
                     'content' => $h5pContent
                 ];
                 $editorSection['activities'][] = $editorActivity;
@@ -5630,7 +5938,8 @@ function parseDriveMbz($input) {
             unset($edAct);
             $editorSections[] = $editorSection;
         }
-        
+
+        if ($progressId !== '') progressClear($progressId);
         echo json_encode([
             'success' => true,
             'course' => [
@@ -5639,12 +5948,13 @@ function parseDriveMbz($input) {
                 'sections' => $editorSections
             ]
         ]);
-        
+
     } catch (Exception $e) {
+        if (!empty($progressId)) progressClear($progressId);
         echo json_encode(['error' => 'Erreur de parsing: ' . $e->getMessage()]);
     }
-    
-    // Supprimer le cache d'extraction (tmp/course_{md5}/) 
+
+    // Supprimer le cache d'extraction (tmp/course_{md5}/)
     // Les fichiers sont déjà copiés dans editor_uploads/{sessionId}/
     // Le viewer recréera le cache à la demande si un élève ouvre le cours
     if (!empty($extractDir) && is_dir($extractDir) && strpos($extractDir, TMP_PATH) === 0) {
@@ -5657,11 +5967,13 @@ function parseDriveMbz($input) {
  */
 function parseLocalCourse($input) {
     $courseId = $input['course_id'] ?? '';
-    
+    $progressId = $input['progressId'] ?? '';
+
     if (empty($courseId)) {
         echo json_encode(['error' => 'ID de cours manquant']);
         return;
     }
+    if ($progressId !== '') progressSet($progressId, 5, 'Lecture du cours…');
     
     // Vérifier espace serveur (les fichiers seront copiés dans editor_uploads)
     $check = checkExtractionStatus();
@@ -5720,9 +6032,18 @@ function parseLocalCourse($input) {
         // Copier les fichiers et créer un mapping ancien chemin -> nouveau URL
         $fileMapping = [];
         $hashMapping = []; // hash -> {url, originalName}
+        $totalFichiers = count($mbzFiles);
+        $fichiersFaits = 0;
         foreach ($mbzFiles as $file) {
+            if ($progressId !== '' && ($fichiersFaits % 5) === 0) {
+                progressSet($progressId,
+                    $totalFichiers ? 10 + 80 * ($fichiersFaits / $totalFichiers) : 10,
+                    'Fichier ' . ($fichiersFaits + 1) . '/' . $totalFichiers . '…');
+            }
+            $fichiersFaits++;
+
             if (empty($file['hash']) || $file['filename'] === '.') continue;
-            
+
             // Chemin source dans l'archive extraite (local)
             $prefix = substr($file['hash'], 0, 2);
             $srcPath = $coursePath . '/files/' . $prefix . '/' . $file['hash'];
@@ -5931,6 +6252,10 @@ function parseLocalCourse($input) {
                     'type' => $activity['type'] ?? 'hvp',
                     'name' => $activity['name'] ?? 'Activité',
                     'h5pType' => $h5pType,
+                    // La consigne affichée AU-DESSUS de l'activité (champ `intro` de Moodle).
+                    // Sans elle, le « Dans le schéma ci-dessus, localisez… » d'un
+                    // Trouver-les-zones était perdu dès l'import, donc aussi à l'export.
+                    'intro' => resolvePluginfileUrls($activity['intro'] ?? '', $fileMapping),
                     'content' => $h5pContent
                 ];
                 $editorSection['activities'][] = $editorActivity;
@@ -5960,7 +6285,8 @@ function parseLocalCourse($input) {
             unset($edAct);
             $editorSections[] = $editorSection;
         }
-        
+
+        if ($progressId !== '') progressClear($progressId);
         echo json_encode([
             'success' => true,
             'course' => [
@@ -5969,8 +6295,9 @@ function parseLocalCourse($input) {
                 'sections' => $editorSections
             ]
         ]);
-        
+
     } catch (Exception $e) {
+        if (!empty($progressId)) progressClear($progressId);
         echo json_encode(['error' => 'Erreur de parsing: ' . $e->getMessage()]);
     }
 }
@@ -6573,12 +6900,21 @@ function _collectAndCopyFiles(&$content, &$allFiles, $coursePath, $editorUploads
  * Flush les fichiers pending vers Google Drive
  */
 function editorFlush($input) {
+    // Un lot = jusqu'à 10 uploads Drive séquentiels. Il ne doit être interrompu ni par
+    // le max_execution_time par défaut du mutualisé OVH, ni par l'abandon du fetch côté
+    // client (timeout 60 s dans editor-drive-sync.js) : une interruption au milieu du
+    // lot est exactement la « fenêtre de perte » qui a fait disparaître des médias
+    // (corrigée aussi dans flushToDrive : mapping écrit par fichier, avant l'unlink).
+    ignore_user_abort(true);
+    @set_time_limit(300);
+    @ini_set('max_execution_time', '300');
+
     $sessionId = $input['sessionId'] ?? '';
     if (empty($sessionId)) {
         echo json_encode(['success' => false, 'error' => 'sessionId manquant']);
         return;
     }
-    
+
     require_once __DIR__ . '/../includes/EditorDriveSync.php';
     
     $maxFiles = (int)($input['maxFiles'] ?? 5);
@@ -7056,14 +7392,17 @@ function loadEditorSessionDraft($input) {
         ]
     ], JSON_UNESCAPED_UNICODE);
     
-    // Ajouter &session=xxx aux URLs serve_upload qui n'ont pas déjà un param session
+    // Ajouter &session=xxx aux URLs serve_upload qui n'ont AUCUN param session.
+    // Le lookahead balaie l'URL entière : une URL de la forme file=X&session=Y ne doit
+    // PAS être re-stampée (PHP retient le DERNIER param → l'URL pointerait sur la
+    // mauvaise session, cf. les doubles stamps constatés le 07/08/2026).
     $jsonStr = preg_replace(
-        '#action=serve_upload&(?!session=)file=#',
+        '#action=serve_upload&(?![^"\\\\\s]*session=)file=#',
         'action=serve_upload&session=' . urlencode($safeId) . '&file=',
         $jsonStr
     );
     $jsonStr = preg_replace(
-        '#action=serve_upload&amp;(?!session=)file=#',
+        '#action=serve_upload&amp;(?![^"\\\\\s]*session=)file=#',
         'action=serve_upload&amp;session=' . urlencode($safeId) . '&amp;file=',
         $jsonStr
     );
@@ -7148,15 +7487,24 @@ function syncEditorFiles($input) {
                 }
             }
             // Aussi supprimer les fichiers locaux qui ne sont NI référencés NI dans le mapping
-            // (orphelins d'anciennes éditions)
+            // (orphelins d'anciennes éditions).
+            //
+            // GARDE-FOU : on épargne les fichiers récents. « Importer un parcours » décompresse
+            // TOUS les fichiers du .mbz avant que le professeur n'ait choisi ce qu'il importe ;
+            // tant qu'il est dans la boîte de dialogue, ces fichiers ne sont référencés nulle
+            // part et un tick de synchronisation Drive les effaçait — le parcours arrivait
+            // ensuite sans aucune image. Ces orphelins seront repris au tick suivant, et de
+            // toute façon par le nettoyage automatique des 24 h.
+            $delaiDeGrace = 30 * 60; // 30 min : largement de quoi choisir dans la liste
+            $limiteAge = time() - $delaiDeGrace;
             $referencedSet = array_flip($referencedFiles);
             foreach (glob($sessionDir . '/*') ?: [] as $fp) {
                 if (!is_file($fp)) continue;
                 $fn = basename($fp);
-                if (!isset($referencedSet[$fn]) && !isset($fileMapping[$fn])) {
-                    @unlink($fp);
-                    $cleaned++;
-                }
+                if (isset($referencedSet[$fn]) || isset($fileMapping[$fn])) continue;
+                if (@filemtime($fp) > $limiteAge) continue;   // import peut-être en cours
+                @unlink($fp);
+                $cleaned++;
             }
         }
     }

@@ -635,6 +635,12 @@
     color: #333;
     border-color: #d1d5db;
 }
+/* Exception : la zone de saisie libre (H5P.ExportableTextArea) a sa propre bordure bleutée,
+   que la règle ci-dessus écraserait. L'îlot doit rendre à l'identique du thème clair. */
+:root[data-theme="dark"] .activity-wrapper .h5p-eta-input,
+:root[data-theme="dark"] .cp-canvas .h5p-eta-input {
+    border-color: #ccd3f0;
+}
 
 /* -----------------------------------------------------
    6 bis. EXCEPTION : le CHROME situé DANS un îlot

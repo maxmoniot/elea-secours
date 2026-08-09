@@ -37,21 +37,41 @@ function loadImportFile() {
     }
     
     const fileName = file.name.replace(/\.mbz$/i, '');
-    showLoadingOverlay('Import du parcours...', fileName);
-    
+    const progressId = newProgressId();
+    let annule = false;
+    let requete = null;
+
+    showLoadingOverlay('Import du parcours...', fileName, true, function() {
+        // L'import n'a encore rien touché au cours : annuler = simplement cesser d'attendre.
+        annule = true;
+        if (requete && requete.abort) requete.abort();
+        stopServerProgress();
+        showToast('Import annulé', 'info');
+    });
+    setLoadingProgress(0, 'Envoi du fichier…');
+
     const formData = new FormData();
     formData.append('action', 'parse_mbz');
     formData.append('file', file);
     formData.append('session_id', getEditorSessionId());
-    
-    fetch('api/editor_api.php', {
-        method: 'POST',
-        body: formData
-    })
-    .then(r => r.json())
+    formData.append('progressId', progressId);
+
+    // 0-35 % : envoi du fichier (mesuré) ; 35-100 % : traitement serveur (sondé)
+    requete = postFormWithProgress(formData, function(fraction) {
+        if (annule) return;
+        setLoadingProgress(fraction * 35, 'Envoi du fichier… ' + Math.round(fraction * 100) + ' %');
+        if (fraction >= 1) {
+            setLoadingProgress(35, 'Lecture du cours…');
+            watchServerProgress(progressId, 35, 100);
+        }
+    });
+
+    requete
     .then(data => {
+        if (annule) return;
+        stopServerProgress();
         hideLoadingOverlay();
-        
+
         if (data.success) {
             showImportSelector(data.course);
         } else {
@@ -59,6 +79,7 @@ function loadImportFile() {
         }
     })
     .catch(err => {
+        if (annule || err.annule) return;
         hideLoadingOverlay();
         showToast('Erreur: ' + err.message, 'error');
     });
@@ -152,15 +173,19 @@ function toggleDriveFolder(idx) {
 }
 
 function loadPermanentCourse(gdriveId, name) {
-    showLoadingOverlay('Chargement du parcours...', name);
-    
+    showLoadingOverlay('Chargement du parcours...', name, true);
+    setLoadingProgress(0, 'Connexion au Drive…');
+    const progressId = newProgressId();
+    watchServerProgress(progressId, 0, 100);
+
     fetch('api/editor_api.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'parse_drive_mbz', gdrive_id: gdriveId })
+        body: JSON.stringify({ action: 'parse_drive_mbz', gdrive_id: gdriveId, progressId: progressId })
     })
     .then(r => r.json())
     .then(data => {
+        stopServerProgress();
         hideLoadingOverlay();
 
         if (data.success) {
@@ -341,6 +366,10 @@ function confirmImportSelection() {
                     h5pType: activity.h5pType || 'unknown',
                     name: activity.name || 'Activité importée',
                     visible: activity.visible !== undefined ? activity.visible : true,
+                    // La consigne affichée au-dessus de l'activité : recopiée pour TOUS les
+                    // types (elle ne l'était que pour assign et resource, si bien qu'un
+                    // « Dans le schéma ci-dessus, localisez… » disparaissait à l'import).
+                    intro: activity.intro || '',
                     content: JSON.parse(JSON.stringify(activity.content || {})) // Deep copy
                 };
                 // Copier les champs spécifiques mapmodules
@@ -395,7 +424,14 @@ function confirmImportSelection() {
     
     closeModal('importModal');
     importedCourseData = null;
-    
+
+    // Normaliser les vidéos simples (H5P.Video) importées : le rendu CoursePresentation ne
+    // sait afficher que H5P.InteractiveVideo. Sans cet appel, une vidéo intégrée au .mbz
+    // arrivait ici non convertie et s'affichait sans lecteur.
+    if (typeof convertH5pVideoToInteractiveVideo === 'function') {
+        convertH5pVideoToInteractiveVideo();
+    }
+
     renderTree();
     showStructureView();
     onCourseModified();
@@ -614,6 +650,11 @@ function loadTemplate(filename) {
             }
         }
         
+        // Idem pour un template : ses vidéos simples doivent être normalisées avant rendu.
+        if (typeof convertH5pVideoToInteractiveVideo === 'function') {
+            convertH5pVideoToInteractiveVideo();
+        }
+
         renderTree();
         renderStructureView();
         onCourseModified();

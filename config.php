@@ -90,6 +90,7 @@ $H5P_LIBRARIES = [
     'H5P.Chart' => '1.2',
     'H5P.Collage' => '0.3',
     'H5P.MemoryGame' => '1.3',
+    'H5P.ImageMultipleHotspotQuestion' => '1.0',
     'H5P.Flashcards' => '1.7',
     'H5P.QuestionSet' => '1.20',
     'H5P.DocumentationTool' => '1.8',
@@ -707,14 +708,42 @@ function cleanExpiredEditorSessions(): int {
     $now = time();
     
     if (!is_dir(EDITOR_SESSIONS_DIR)) return 0;
-    
+
+    // Restes d'écritures atomiques interrompues (> 1 h) : sans intérêt, mais autant
+    // ne rien laisser traîner sur le mutualisé.
+    foreach (glob(EDITOR_SESSIONS_DIR . '/*.tmp*') ?: [] as $tmpFile) {
+        if (is_file($tmpFile) && ($now - @filemtime($tmpFile)) > 3600) @unlink($tmpFile);
+    }
+
     foreach (glob(EDITOR_SESSIONS_DIR . '/*.json') as $metaFile) {
-        $meta = json_decode(file_get_contents($metaFile), true);
-        if (!$meta) { @unlink($metaFile); continue; }
-        
+        $meta = json_decode(@file_get_contents($metaFile), true);
+
+        // Un metadata illisible n'est JAMAIS supprimé : il contient le file_mapping,
+        // c'est-à-dire les seuls pointeurs vers les fichiers déjà partis sur le Drive
+        // (le local est vidé au fur et à mesure pour libérer le mutualisé). L'ancienne
+        // version faisait @unlink() ici, et comme ce nettoyage tourne à CHAQUE chargement
+        // de index.php / editor.php, il suffisait de tomber pendant une réécriture du
+        // JSON pour perdre tout le mapping d'un cours en cours d'édition — toutes les
+        // images du cours disparaissaient d'un coup (incident du 07/08/2026, 552 → 0).
+        // Désormais : on tente de reconstruire depuis le journal, sinon on met de côté.
+        if (!is_array($meta)) {
+            $safeIdCorrompu = preg_replace('/[^a-zA-Z0-9_-]/', '', basename($metaFile, '.json'));
+            require_once __DIR__ . '/includes/EditorDriveSync.php';
+            $repare = $safeIdCorrompu ? EditorDriveSync::getMeta($safeIdCorrompu) : null; // reconstruit via le journal
+            if (is_array($repare)) {
+                error_log("cleanExpiredEditorSessions: metadata illisible reconstruite depuis le journal ($safeIdCorrompu)");
+                $meta = $repare;
+            } else {
+                $quarantaine = $metaFile . '.corrompu-' . date('Ymd-His');
+                @rename($metaFile, $quarantaine);
+                error_log("cleanExpiredEditorSessions: metadata illisible mise de côté ($quarantaine) — AUCUNE suppression");
+                continue;
+            }
+        }
+
         $lastActivity = $meta['last_activity'] ?? $meta['created_at'] ?? 0;
         if (($now - $lastActivity) < $maxAge) continue;
-        
+
         $sessionId = $meta['session_id'] ?? basename($metaFile, '.json');
         $safeId = preg_replace('/[^a-zA-Z0-9_-]/', '', $sessionId);
         if (empty($safeId)) continue;
@@ -725,6 +754,8 @@ function cleanExpiredEditorSessions(): int {
         
         // 2. Supprimer le draft auto
         $draftFile = CACHE_DIR . '/drafts/auto/' . $safeId . '.json';
+        @unlink($draftFile . '.prev');
+        foreach (glob($draftFile . '.tmp*') ?: [] as $f) @unlink($f);
         if (file_exists($draftFile)) { @unlink($draftFile); }
         
         // 3. Supprimer le dossier Drive si présent
@@ -739,8 +770,11 @@ function cleanExpiredEditorSessions(): int {
             }
         }
         
-        // 4. Supprimer la metadata
+        // 4. Supprimer la metadata, son journal et son verrou (session réellement expirée).
+        //    Journal d'abord : getMeta() sait reconstruire une session depuis lui.
+        @unlink(EDITOR_SESSIONS_DIR . '/' . $safeId . '.map.log');
         @unlink($metaFile);
+        @unlink($metaFile . '.lock');
         $count++;
     }
     

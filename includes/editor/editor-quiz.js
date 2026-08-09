@@ -13,6 +13,19 @@ function migrateQuestionSetData(activity) {
     if (!activity.content) activity.content = {};
     if (!activity.content.questions) activity.content.questions = [];
 
+    // Ancien format : l'image vivait dans un champ `questionimage` à part, affiché SOUS
+    // l'énoncé. Éléa, lui, l'intègre dans le texte. On la remet donc dans l'énoncé, une
+    // fois pour toutes — l'export produisait déjà exactement ce HTML, le .mbz est identique.
+    activity.content.questions.forEach(q => {
+        if (!q || !q.questionimage || !q.questionimage.path) return;
+        const im = q.questionimage;
+        const taille = (im.width && im.height) ? ` width="${im.width}" height="${im.height}"` : '';
+        const tag = `<img class="img-fluid" role="presentation" src="${im.path}" alt=""${taille}>`;
+        const txt = q.questiontext || '';
+        q.questiontext = /<\/p>\s*$/.test(txt) ? txt.replace(/<\/p>\s*$/, tag + '</p>') : (txt + tag);
+        q.questionimage = null;
+    });
+
     activity.content.questions = activity.content.questions.map(q => {
         if (q.qtype) return q;
 
@@ -51,11 +64,20 @@ function migrateQuestionSetData(activity) {
     // Nettoyage défensif : retirer les balises HTML héritées d'imports MBZ Moodle
     // (Moodle stocke les réponses en HTML <p>...</p>, mais l'éditeur les affiche
     // dans des input text — sans nettoyage, on voit littéralement <p>Réponse</p>).
+    //
+    // ⚠️ Uniquement pour les types dont les réponses sont VRAIMENT éditées en texte brut,
+    // c'est-à-dire la réponse courte. Un QCM édite ses réponses dans une zone riche et
+    // elles peuvent contenir une image ; le Vrai/Faux ne se sert même pas de `answers`.
+    // Cette fonction tourne à CHAQUE rendu de l'éditeur : sans cette restriction, le
+    // nettoyage effaçait toutes les images de réponses à la moindre modification (ajout
+    // ou suppression d'une réponse, changement d'image, bascule d'une option…), et un
+    // aller-retour de type QCM → Vrai/Faux → QCM les perdait aussi.
+    const TYPES_TEXTE_BRUT = { shortanswer: 1, numerical: 1 };
     activity.content.questions.forEach(q => {
         if (q.qtype === 'gapselect' && q.choices) {
             q.choices.forEach(c => { delete c.correct; });
         }
-        if (Array.isArray(q.answers)) {
+        if (Array.isArray(q.answers) && TYPES_TEXTE_BRUT[q.qtype]) {
             q.answers.forEach(a => {
                 if (a && typeof a.text === 'string' && /<[a-zA-Z]/.test(a.text)) {
                     a.text = qsStripAnswerTags(a.text);
@@ -266,15 +288,19 @@ function renderMultichoiceEditor(q, idx) {
     const answers = q.answers || [];
     let answersHtml = '';
     answers.forEach((ans, aIdx) => {
-        // Nettoyer les balises HTML héritées d'un import MBZ
-        if (ans.text && /<[a-zA-Z]/.test(ans.text)) ans.text = qsStripAnswerTags(ans.text);
+        // Le HTML est CONSERVÉ : une réponse peut contenir une image, comme dans Éléa.
+        // (Auparavant qsStripAnswerTags vidait ces réponses-là.)
         answersHtml += `
             <div class="quiz-answer-item">
                 <input type="${q.single !== false ? 'radio' : 'checkbox'}" name="qsMulti${idx}"
                        class="quiz-answer-correct" ${ans.correct ? 'checked' : ''}
                        onchange="qsUpdateMCAnswer(${idx}, ${aIdx}, this.checked)">
-                <input type="text" class="quiz-answer-text" onfocus="this.select()" value="${escapeHtml(ans.text || '')}"
-                       onchange="qsUpdateAnswerText(${idx}, ${aIdx}, this.value)" placeholder="Texte de la réponse">
+                <div class="quiz-answer-text qs-answer-rich" contenteditable="true"
+                     id="qsAnswer${idx}_${aIdx}"
+                     data-placeholder="Texte de la réponse"
+                     oninput="qsUpdateAnswerHtml(${idx}, ${aIdx}, this.innerHTML)"
+                     onblur="qsUpdateAnswerHtml(${idx}, ${aIdx}, this.innerHTML)">${ans.text || ''}</div>
+                <button class="quiz-answer-img" onclick="qsInsertAnswerImage(${idx}, ${aIdx})" title="Insérer une image">🖼️</button>
                 <button class="quiz-answer-delete" onclick="qsDeleteAnswer(${idx}, ${aIdx})">🗑️</button>
             </div>`;
     });
@@ -452,6 +478,8 @@ function qsStartEditTitle(idx, el) {
         const val = input.value.trim();
         if (val) {
             q.name = val;
+            // Titre saisi à la main : l'énoncé ne doit plus jamais le réécrire
+            q._autoName = false;
             onCourseModified();
         }
         el.textContent = q.name || currentName;
@@ -469,11 +497,13 @@ function qsAddQuestion(qtype) {
     const activity = getSelectedActivity();
     migrateQuestionSetData(activity);
     
+    // _autoName : le titre affiché n'est qu'un libellé par défaut, il suivra l'énoncé
+    // jusqu'à ce que le professeur le renomme lui-même (voir qsAutoName).
     const defaults = {
-        multichoice: { qtype:'multichoice', name:'Nouvelle question', questiontext:'', questionimage:null, defaultmark:1, single:true, shuffleanswers:true, answers:[{text:'Réponse A',correct:true},{text:'Réponse B',correct:false}] },
-        truefalse: { qtype:'truefalse', name:'Vrai ou Faux', questiontext:'', questionimage:null, defaultmark:1, correctanswer:true },
-        shortanswer: { qtype:'shortanswer', name:'Réponse courte', questiontext:'', questionimage:null, defaultmark:1, usecase:false, answers:[{text:'',fraction:1.0}] },
-        gapselect: { qtype:'gapselect', name:'Sélection de mots', questiontext:'', questionimage:null, defaultmark:1, shuffleanswers:true, choices:[] }
+        multichoice: { qtype:'multichoice', name:'Nouvelle question', _autoName:true, questiontext:'', questionimage:null, defaultmark:1, single:true, shuffleanswers:true, answers:[{text:'Réponse A',correct:true},{text:'Réponse B',correct:false}] },
+        truefalse: { qtype:'truefalse', name:'Vrai ou Faux', _autoName:true, questiontext:'', questionimage:null, defaultmark:1, correctanswer:true },
+        shortanswer: { qtype:'shortanswer', name:'Réponse courte', _autoName:true, questiontext:'', questionimage:null, defaultmark:1, usecase:false, answers:[{text:'',fraction:1.0}] },
+        gapselect: { qtype:'gapselect', name:'Sélection de mots', _autoName:true, questiontext:'', questionimage:null, defaultmark:1, shuffleanswers:true, choices:[] }
     };
     
     activity.content.questions.push(defaults[qtype] || defaults.multichoice);
@@ -585,37 +615,81 @@ function qsOnRichTextInput(idx) {
     const q = activity.content.questions[idx];
     if (!q) return;
     q.questiontext = editor.innerHTML;
-    q.name = stripHtml(editor.innerHTML).substring(0, 50) || 'Question ' + (idx + 1);
+    qsAutoName(q, idx, editor.innerHTML);
     onCourseModified();
 }
 
-// Handler paste d'image dans le richtext
-function qsHandleRichTextPaste(idx, event) {
+/**
+ * Renseigne le titre de la question depuis son énoncé, mais UNIQUEMENT tant qu'il est
+ * automatique : un titre saisi par le professeur (ou repris d'un .mbz importé) ne doit
+ * jamais être écrasé. Ce handler est aussi appelé au `blur` de l'énoncé, donc un simple
+ * clic dans le champ suffisait auparavant à remplacer le titre.
+ */
+function qsAutoName(q, idx, html) {
+    if (!q._autoName && (q.name || '').trim() !== '') return;
+    const nouveau = stripHtml(html).trim().substring(0, 50);
+    q.name = nouveau || 'Question ' + (idx + 1);
+    // Le titre reste automatique tant qu'il n'a pas été saisi à la main
+    q._autoName = true;
+    // Rafraîchir l'en-tête de la carte sans reconstruire tout l'éditeur
+    const titre = document.querySelector('.quiz-question-card[data-qidx="' + idx + '"] .quiz-question-title');
+    // Ne pas écraser le champ de saisie si le titre est justement en cours de renommage
+    if (titre && !titre.querySelector('input')) titre.textContent = q.name;
+}
+
+// Handler paste d'image dans une zone éditable (énoncé ou réponse)
+function qsHandleRichTextPaste(cible, event) {
     var items = (event.clipboardData || event.originalEvent.clipboardData).items;
     for (var i = 0; i < items.length; i++) {
         if (items[i].type.indexOf('image') !== -1) {
             event.preventDefault();
             var file = items[i].getAsFile();
-            if (file) qsUploadImageFile(idx, file);
+            if (file) qsUploadImageFile(cible.idx, file, cible);
             return;
         }
     }
 }
 
-// Initialiser les handlers paste sur les richtext editors
+// Initialiser les handlers paste sur les zones éditables (énoncés ET réponses)
 function qsInitPasteHandlers() {
     document.querySelectorAll('.qs-richtext-editor').forEach(function(editor) {
         if (editor.dataset.pasteInited) return;
         editor.dataset.pasteInited = '1';
         var idx = parseInt(editor.id.replace('qsRichText', ''));
         if (!isNaN(idx)) {
-            editor.addEventListener('paste', function(e) { qsHandleRichTextPaste(idx, e); });
+            editor.addEventListener('paste', function(e) { qsHandleRichTextPaste({ type: 'question', idx: idx }, e); });
         }
+    });
+    document.querySelectorAll('.qs-answer-rich').forEach(function(zone) {
+        if (zone.dataset.pasteInited) return;
+        zone.dataset.pasteInited = '1';
+        var m = /^qsAnswer(\d+)_(\d+)$/.exec(zone.id || '');
+        if (!m) return;
+        var cible = { type: 'answer', idx: parseInt(m[1]), aIdx: parseInt(m[2]) };
+        zone.addEventListener('paste', function(e) { qsHandleRichTextPaste(cible, e); });
     });
 }
 
 // ==================== IMAGES ====================
+// L'image est insérée DANS le texte, à l'endroit du curseur, comme le fait Éléa
+// (<img> dans le questiontext / l'answertext). Cible courante de l'insertion :
+// { type: 'question', idx } ou { type: 'answer', idx, aIdx }.
+let _qsCibleImage = null;
+
+function qsZoneCible(cible) {
+    if (!cible) return null;
+    return document.getElementById(cible.type === 'answer'
+        ? 'qsAnswer' + cible.idx + '_' + cible.aIdx
+        : 'qsRichText' + cible.idx);
+}
+
 function qsInsertQuestionImage(idx) {
+    _qsCibleImage = { type: 'question', idx: idx };
+    document.getElementById('qsImageInput' + idx)?.click();
+}
+
+function qsInsertAnswerImage(idx, aIdx) {
+    _qsCibleImage = { type: 'answer', idx: idx, aIdx: aIdx };
     document.getElementById('qsImageInput' + idx)?.click();
 }
 
@@ -623,44 +697,69 @@ function qsHandleImageUpload(idx, input) {
     const file = input.files[0];
     if (!file) return;
     if (typeof canAddImage === 'function' && !canAddImage(file)) { input.value = ''; return; }
-    
-    qsUploadImageFile(idx, file);
+
+    qsUploadImageFile(idx, file, _qsCibleImage || { type: 'question', idx: idx });
     input.value = '';
 }
 
-// Upload générique d'image pour une question (via input ou paste)
-function qsUploadImageFile(idx, file) {
+// Insère du HTML à la position du curseur dans une zone éditable (ou à la fin si le
+// curseur n'y est pas), puis répercute le contenu dans le modèle.
+function qsInsererDansZone(zone, html) {
+    if (!zone) return;
+    zone.focus();
+    const sel = window.getSelection();
+    let insere = false;
+    if (sel && sel.rangeCount) {
+        const range = sel.getRangeAt(0);
+        if (zone.contains(range.commonAncestorContainer)) {
+            range.deleteContents();
+            const frag = range.createContextualFragment(html);
+            const dernier = frag.lastChild;
+            range.insertNode(frag);
+            if (dernier) {
+                const apres = document.createRange();
+                apres.setStartAfter(dernier);
+                apres.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(apres);
+            }
+            insere = true;
+        }
+    }
+    if (!insere) zone.insertAdjacentHTML('beforeend', html);
+}
+
+// Upload générique d'image pour une question ou une réponse (via bouton ou collage)
+function qsUploadImageFile(idx, file, cible) {
+    cible = cible || { type: 'question', idx: idx };
     showToast('Upload en cours...', 'info');
     const formData = new FormData();
     formData.append('action', 'upload_file');
     formData.append('file', file);
     formData.append('session_id', typeof getEditorSessionId === 'function' ? getEditorSessionId() : '');
-    
+
     fetch('api/editor_api.php', { method: 'POST', body: formData })
     .then(r => r.ok ? r.text() : Promise.reject('Erreur HTTP ' + r.status))
     .then(text => { try { return JSON.parse(text); } catch(e) { throw new Error('Réponse invalide'); } })
     .then(data => {
-        if (data.success) {
-            const activity = getSelectedActivity();
-            const img = new Image();
-            img.onload = () => {
-                const natW = img.naturalWidth;
-                const natH = img.naturalHeight;
-                const defaultH = Math.min(300, natH);
-                const defaultW = Math.round(natW * (defaultH / natH));
-                activity.content.questions[idx].questionimage = { 
-                    path: data.url, 
-                    width: defaultW, 
-                    height: defaultH,
-                    originalWidth: natW,
-                    originalHeight: natH
-                };
-                renderQuestionSetEditor(activity);
-                showToast('Image ajoutée (' + natW + '×' + natH + 'px)', 'success');
-                onCourseModified();
-            };
-            img.src = data.url;
-        } else { throw new Error(data.error || 'Erreur'); }
+        if (!data.success) throw new Error(data.error || 'Erreur');
+        const img = new Image();
+        img.onload = () => {
+            const natW = img.naturalWidth, natH = img.naturalHeight;
+            // Une image de réponse reste petite (elle vit dans une ligne de choix)
+            const hMax = cible.type === 'answer' ? 90 : 300;
+            const h = Math.min(hMax, natH);
+            const w = Math.round(natW * (h / natH));
+            const tag = `<img class="img-fluid" role="presentation" src="${data.url}" alt=""`
+                      + ` width="${w}" height="${h}">`;
+            const zone = qsZoneCible(cible);
+            qsInsererDansZone(zone, tag);
+            if (cible.type === 'answer') qsUpdateAnswerHtml(cible.idx, cible.aIdx, zone ? zone.innerHTML : tag);
+            else qsOnRichTextInput(cible.idx);
+            showToast('Image insérée (' + natW + '×' + natH + 'px)', 'success');
+        };
+        img.onerror = () => showToast('Image illisible', 'error');
+        img.src = data.url;
     })
     .catch(err => { console.error('Erreur upload:', err); showToast('Erreur: ' + err.message, 'error'); });
 }
@@ -765,6 +864,17 @@ function qsUpdateMCAnswer(idx, aIdx, checked) {
 
 function qsUpdateAnswerText(idx, aIdx, value) {
     getSelectedActivity().content.questions[idx].answers[aIdx].text = value;
+    onCourseModified();
+}
+
+// Réponse de QCM : le contenu est du HTML (il peut contenir une image).
+// Une réponse réduite à une image ne doit pas être considérée comme vide.
+function qsUpdateAnswerHtml(idx, aIdx, html) {
+    const activity = getSelectedActivity();
+    const rep = activity && activity.content.questions[idx] && activity.content.questions[idx].answers[aIdx];
+    if (!rep) return;
+    const vide = !html || (!/<img/i.test(html) && stripHtml(html).trim() === '');
+    rep.text = vide ? '' : html;
     onCourseModified();
 }
 
@@ -1343,6 +1453,7 @@ function qsAddDdimageortext() {
     activity.content.questions.push({
         qtype: 'ddimageortext',
         name: 'Glisser-Déposer',
+        _autoName: true,
         questiontext: '<p>Compléter le schéma</p>',
         questionimage: null,
         defaultmark: 1,
@@ -1360,17 +1471,64 @@ function qsAddDdimageortext() {
     qsOpenDdiEditor(lastIdx);
 }
 
+/**
+ * Renommage du titre depuis l'en-tête de l'éditeur glisser : celui-ci affiche le titre de la
+ * QUESTION, il doit donc modifier la question et non l'évaluation sélectionnée.
+ */
+function qsStartEditTitleFromDdi(element) {
+    if (_qsDdiEditIdx === null) return;
+    if (element.contentEditable === 'true') return;
+    const activity = getSelectedActivity();
+    const q = activity?.content?.questions?.[_qsDdiEditIdx];
+    if (!q) return;
+
+    const titreInitial = q.name || '';
+    element.classList.add('editing');
+    element.contentEditable = true;
+    element.textContent = titreInitial;
+    element.focus();
+
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    const finishEdit = () => {
+        element.classList.remove('editing');
+        element.contentEditable = false;
+        const nouveau = element.textContent.trim();
+        if (nouveau && nouveau !== titreInitial) {
+            q.name = nouveau;
+            q._autoName = false;   // titre saisi : l'énoncé ne le réécrira plus
+            if (window._qsDdiTempActivity) window._qsDdiTempActivity.name = nouveau;
+            onCourseModified();
+        }
+        element.textContent = q.name || titreInitial;
+    };
+
+    element.onblur = finishEdit;
+    element.onkeydown = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); element.blur(); }
+        else if (e.key === 'Escape') { element.textContent = titreInitial; element.blur(); }
+    };
+}
+
 function qsOpenDdiEditor(questionIdx) {
     const activity = getSelectedActivity();
     if (!activity || !activity.content || !activity.content.questions[questionIdx]) return;
-    
+
     _qsDdiEditIdx = questionIdx;
     var q = activity.content.questions[questionIdx];
-    
+
     // Créer un objet activity temporaire compatible avec renderDdimageortextEditor
     var tempActivity = {
         id: activity.id + '_ddi_' + questionIdx,
         name: q.name || 'Glisser-Déposer',
+        // Énoncé tel qu'il est chargé dans l'éditeur (avec son texte par défaut si la
+        // question n'en avait pas) : sert à ne réécrire la question que si l'utilisateur
+        // l'a réellement modifié (voir qsCloseDdiEditor).
+        _enonceOuverture: q.questiontext || '<p>Compléter le schéma</p>',
         type: 'quiz',
         quizType: 'ddimageortext',
         _parentQuizActivity: activity,
@@ -1416,11 +1574,16 @@ function qsCloseDdiEditor() {
         q.sourceWidth = tempAct.content.sourceWidth;
         q.drags = tempAct.content.drags || [];
         q.drops = tempAct.content.drops || [];
-        q.questiontext = tempAct.content.questiontext || q.questiontext;
+        // L'éditeur glisser affiche un énoncé par défaut quand la question n'en a pas.
+        // Ne réécrire la question que si l'énoncé a réellement changé, sinon un simple
+        // aller-retour lui collait ce texte par défaut — et donc un nouveau titre.
+        var enonceEdite = tempAct.content.questiontext || '';
+        if (enonceEdite !== (tempAct._enonceOuverture || '')) {
+            q.questiontext = enonceEdite || q.questiontext;
+            // Titre depuis l'énoncé, seulement s'il est encore automatique
+            qsAutoName(q, _qsDdiEditIdx, q.questiontext || '');
+        }
         q.shuffleanswers = tempAct.content.shuffleanswers;
-        // Mettre à jour le nom depuis le questiontext
-        var plainText = (q.questiontext || '').replace(/<[^>]*>/g, '').trim();
-        if (plainText) q.name = plainText.substring(0, 50);
     }
     
     _qsDdiEditIdx = null;
