@@ -44,6 +44,7 @@ class EleaMbzExporter {
     private $_driveManager = null; // Singleton DriveManager pour l'export
     private $exportLogs = []; // Log messages for browser console
     private $droppedActivities = []; // Activités non exportables écartées (voir dropUnsupportedActivities)
+    private $courseImageFileIds = []; // IDs files.xml de la vignette du cours (image + entrée dossier)
     private $unresolvedFiles = []; // Fichiers référencés introuvables partout (nom => true) — signalés au prof
     private $progressCb = null;      // Callback d'avancement (barre de progression du navigateur)
     
@@ -519,7 +520,11 @@ class EleaMbzExporter {
         $this->generateOutcomesXml();
         $this->generateRolesXml();
         $this->generateScalesXml();
-        
+
+        // 1b. Vignette du cours — AVANT course/ : ses IDs de fichiers doivent figurer
+        // dans le fileref de course/inforef.xml, écrit par generateCourseFolder().
+        $this->addCourseImageFiles();
+
         // 2. Dossier course/
         $this->generateCourseFolder();
         
@@ -1104,15 +1109,8 @@ class EleaMbzExporter {
             $this->writeFile($quiz['dir'] . '/inforef.xml', $xml);
         }
         
-        // 2. Mettre à jour course/inforef.xml
-        $fileRefXml = '';
-        if (!empty($this->questionFileIds)) {
-            $fileRefXml = "\n  <fileref>";
-            foreach ($this->questionFileIds as $fid) {
-                $fileRefXml .= "\n    <file>\n      <id>{$fid}</id>\n    </file>";
-            }
-            $fileRefXml .= "\n  </fileref>";
-        }
+        // 2. Mettre à jour course/inforef.xml (vignette du cours + fichiers des questions)
+        $fileRefXml = $this->buildCourseFilerefXml();
         $xml = '<?xml version="1.0" encoding="UTF-8"?>
 <inforef>
   <roleref>
@@ -1516,9 +1514,143 @@ class EleaMbzExporter {
     <role>
       <id>5</id>
     </role>
-  </roleref>
+  </roleref>' . $this->buildCourseFilerefXml() . '
 </inforef>';
         $this->writeFile('course/inforef.xml', $xml);
+    }
+
+    /**
+     * Le <fileref> de course/inforef.xml : vignette du cours + fichiers des questions.
+     * Sans cette référence, Moodle ignore les entrées files.xml du contexte de cours
+     * (l'image est dans l'archive mais n'est jamais restaurée).
+     */
+    private function buildCourseFilerefXml(): string {
+        $ids = array_merge($this->courseImageFileIds, $this->questionFileIds);
+        if (empty($ids)) return '';
+        $xml = "\n  <fileref>";
+        foreach ($ids as $fid) {
+            $xml .= "\n    <file>\n      <id>{$fid}</id>\n    </file>";
+        }
+        return $xml . "\n  </fileref>";
+    }
+
+    /**
+     * Vignette du cours : l'image affichée sur la carte du parcours dans Éléa.
+     * Elle ne dépend d'aucune activité — c'est un fichier du CONTEXTE DU COURS
+     * (component « course », filearea « overviewfiles », itemid 0), accompagné de
+     * son entrée de dossier « . ». Sans ces deux lignes dans files.xml + leurs IDs
+     * dans course/inforef.xml, le cours réimporté sur Éléa perd sa vignette.
+     */
+    private function addCourseImageFiles() {
+        $vignette = $this->data['vignette'] ?? null;
+        if (empty($vignette)) return;
+
+        $url = is_array($vignette) ? ($vignette['url'] ?? '') : (string)$vignette;
+        $nom = is_array($vignette) ? ($vignette['name'] ?? '') : '';
+        if ($url === '') return;
+
+        $localPath = $this->resolveImagePath($url);
+        if (!$localPath || !file_exists($localPath)) {
+            // Signalé au professeur comme n'importe quel média manquant : mieux vaut
+            // un avertissement qu'une vignette disparue en silence.
+            $manquant = $nom !== '' ? $nom : 'vignette du cours';
+            $this->unresolvedFiles[$manquant] = true;
+            $this->logExport('[vignette] fichier introuvable : ' . substr($url, 0, 150));
+            return;
+        }
+
+        $contenu = @file_get_contents($localPath);
+        if ($contenu === false || strlen($contenu) < 10) {
+            $this->logExport('[vignette] fichier illisible : ' . $localPath);
+            return;
+        }
+
+        $filename = $this->buildCourseImageFilename($nom, $url, $localPath);
+        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        $mimeMap = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
+                    'gif' => 'image/gif', 'webp' => 'image/webp', 'svg' => 'image/svg+xml'];
+        $mime = $mimeMap[$ext] ?? 'image/png';
+
+        $contenthash = sha1($contenu);
+        $filesize = strlen($contenu);
+        $hashPrefix = substr($contenthash, 0, 2);
+
+        $filesSubDir = $this->exportDir . '/files/' . $hashPrefix;
+        if (!is_dir($filesSubDir)) {
+            mkdir($filesSubDir, 0777, true);
+        }
+        if (!file_exists($filesSubDir . '/' . $contenthash)) {
+            file_put_contents($filesSubDir . '/' . $contenthash, $contenu);
+        }
+        $this->archiveIndex[] = "files/\td\t0\t?";
+        $this->archiveIndex[] = "files/{$hashPrefix}/\td\t0\t?";
+        $this->archiveIndex[] = "files/{$hashPrefix}/{$contenthash}\tf\t{$filesize}\t" . $this->backupDate;
+
+        $fileId = $this->fileId++;
+        $this->filesManifest[] = [
+            'id' => $fileId,
+            'contenthash' => $contenthash,
+            'contextid' => $this->contextId,
+            'component' => 'course',
+            'filearea' => 'overviewfiles',
+            'itemid' => 0,
+            'filepath' => '/',
+            'filename' => $filename,
+            'filesize' => $filesize,
+            'mimetype' => $mime,
+            'source' => $filename,
+        ];
+
+        $dirFileId = $this->fileId++;
+        $this->filesManifest[] = [
+            'id' => $dirFileId,
+            'contenthash' => 'da39a3ee5e6b4b0d3255bfef95601890afd80709',
+            'contextid' => $this->contextId,
+            'component' => 'course',
+            'filearea' => 'overviewfiles',
+            'itemid' => 0,
+            'filepath' => '/',
+            'filename' => '.',
+            'filesize' => 0,
+            'mimetype' => '$@NULL@$',
+        ];
+
+        $this->courseImageFileIds = [$fileId, $dirFileId];
+        $this->logExport('[vignette] ' . $filename . ' (' . round($filesize / 1024) . ' Ko) ajoutée au cours');
+    }
+
+    /**
+     * Nom de fichier de la vignette dans l'archive. On garde le nom d'origine quand
+     * il est parlant ; les noms techniques de l'éditeur (upload_…, import_…) sont
+     * remplacés par le nom du cours, comme le fait Éléa.
+     */
+    private function buildCourseImageFilename($nom, $url, $localPath): string {
+        $candidat = $nom !== '' ? $nom : basename(parse_url($url, PHP_URL_PATH) ?: '');
+        if ($candidat === '' && preg_match('#file=([^&]+)#', $url, $m)) {
+            $candidat = urldecode($m[1]);
+        }
+        $candidat = basename(str_replace('\\', '/', $candidat));
+        $candidat = preg_replace('#[/:*?"<>|]+#', '', $candidat);
+
+        $ext = strtolower(pathinfo($candidat, PATHINFO_EXTENSION));
+        if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'], true)) {
+            $detecte = @getimagesize($localPath);
+            $parType = [IMAGETYPE_JPEG => 'jpg', IMAGETYPE_PNG => 'png',
+                        IMAGETYPE_GIF => 'gif', IMAGETYPE_WEBP => 'webp'];
+            $ext = $parType[$detecte[2] ?? 0] ?? 'png';
+        }
+
+        if ($candidat === '' || preg_match('#^(?:upload|import|tpl)_#i', $candidat)) {
+            $base = $this->data['name'] ?? 'cours';
+            $base = preg_replace('#[^\p{L}\p{N}\s._-]+#u', '', $base);
+            $base = trim(preg_replace('#\s+#u', '-', trim($base)), '-');
+            if ($base === '') $base = 'vignette';
+            $candidat = mb_substr($base, 0, 80) . '.' . $ext;
+        } elseif (strtolower(pathinfo($candidat, PATHINFO_EXTENSION)) !== $ext) {
+            $candidat = pathinfo($candidat, PATHINFO_FILENAME) . '.' . $ext;
+        }
+
+        return $candidat;
     }
     
     private function generateCourseRolesXml() {

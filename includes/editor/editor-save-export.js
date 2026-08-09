@@ -327,7 +327,11 @@ function restoreEditorState(snap, message) {
  */
 function onCourseModified() {
     updateSaveStatus('modified');
-    
+
+    // Aperçu de la vignette dans le header (ne touche au DOM que si l'URL a changé,
+    // p.ex. après une réécriture d'URL par la synchro Drive)
+    if (typeof courseVignetteRefreshUI === 'function') courseVignetteRefreshUI();
+
     // Recalculer la taille du cours
     if (typeof calculateCourseSize === 'function') {
         calculateCourseSize();
@@ -476,10 +480,12 @@ function loadDraftOnStartup() {
                         id: draft.id || generateId(),
                         name: draft.name || 'Cours restauré',
                         shortname: draft.shortname || 'cours',
+                        vignette: draft.vignette || null,
                         sections: draft.sections || []
                     };
-                    
+
                     document.getElementById('courseName').value = courseData.name;
+                    if (typeof courseVignetteRefreshUI === 'function') courseVignetteRefreshUI();
                     selectedSection = null;
                     selectedActivity = null;
                     
@@ -703,8 +709,12 @@ function loadParsedCourse(parsedCourse) {
         id: generateId(),
         name: parsedCourse.name || 'Cours importé',
         shortname: parsedCourse.shortname || 'cours',
+        // Vignette du cours : présente dans le .mbz (course/overviewfiles), elle doit
+        // survivre à l'aller-retour import → export.
+        vignette: parsedCourse.vignette || null,
         sections: []
     };
+    if (typeof courseVignetteRefreshUI === 'function') courseVignetteRefreshUI();
     
     // Copier les sections avec de nouveaux IDs
     if (parsedCourse.sections && Array.isArray(parsedCourse.sections)) {
@@ -1146,8 +1156,10 @@ function newCourse() {
         id: generateId(),
         name: 'Nouveau cours',
         shortname: 'cours1',
+        vignette: null,
         sections: []
     };
+    if (typeof courseVignetteRefreshUI === 'function') courseVignetteRefreshUI();
 
     document.getElementById('courseName').value = 'Nouveau cours';
     selectedSection = null;

@@ -118,7 +118,8 @@ cleanupPdfPreviews();
         // Vider l'éditeur explicitement : la réponse du serveur a pu arriver juste avant le
         // clic et déjà remplir le cours. On ne touche NI au brouillon NI aux fichiers — ils
         // reviendront au prochain chargement de la page.
-        courseData = { id: generateId(), name: 'Nouveau cours', shortname: 'cours1', sections: [] };
+        courseData = { id: generateId(), name: 'Nouveau cours', shortname: 'cours1', sections: [], vignette: null };
+        if (typeof courseVignetteRefreshUI === 'function') courseVignetteRefreshUI();
         var champNom = document.getElementById('courseName');
         if (champNom) champNom.value = courseData.name;
         selectedSection = null;
@@ -162,7 +163,8 @@ cleanupPdfPreviews();
                 EditorDriveSync.init(newId);
             }
         }
-        courseData = { id: generateId(), name: 'Nouveau cours', shortname: 'cours1', sections: [] };
+        courseData = { id: generateId(), name: 'Nouveau cours', shortname: 'cours1', sections: [], vignette: null };
+        if (typeof courseVignetteRefreshUI === 'function') courseVignetteRefreshUI();
         document.getElementById('courseName').value = 'Nouveau cours';
         selectedSection = null;
         selectedActivity = null;
@@ -179,6 +181,13 @@ cleanupPdfPreviews();
         <div class="header-left">
             <a href="index.php" class="back-btn">← Accueil</a>
             <input type="text" class="course-name-input" id="courseName" value="Nouveau cours" placeholder="Nom du cours">
+            <!-- Vignette du cours (image du parcours dans Éléa, 300 × 215) -->
+            <div class="cvg-control" id="courseVignetteBtn" onclick="openCourseVignetteModal()"
+                 title="Aucune vignette — cliquer pour en ajouter une (300 × 215)">
+                <span class="cvg-label">🖼️ Vignette</span>
+                <img class="cvg-mini" id="courseVignetteThumb" alt="" style="display:none;">
+                <span class="cvg-mini cvg-mini--empty" id="courseVignetteEmpty">+</span>
+            </div>
         </div>
         
         <div class="header-center">
@@ -383,6 +392,33 @@ cleanupPdfPreviews();
         </div>
     </div>
     
+    <!-- Modal Vignette du cours -->
+    <div class="modal-overlay" id="courseVignetteModal">
+        <div class="modal" style="max-width: 460px;">
+            <div class="modal-header">
+                <span class="modal-title">Vignette du cours</span>
+                <button class="modal-close" onclick="closeCourseVignetteModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="cvg-preview" id="courseVignettePreview"
+                     ondragover="courseVignetteDragOver(event)"
+                     ondragleave="courseVignetteDragLeave(event)"
+                     ondrop="courseVignetteDrop(event)"></div>
+                <div class="cvg-info" id="courseVignetteInfo"></div>
+                <p class="cvg-help">
+                    Image affichée sur la carte du parcours dans Éléa. Format attendu :
+                    <strong>300 × 215</strong> — une image d'un autre format est recadrée automatiquement.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="courseVignetteRemoveBtn" onclick="courseVignetteRemove()" style="display:none;">Retirer</button>
+                <button class="btn btn-secondary" onclick="closeCourseVignetteModal()">Fermer</button>
+                <button class="btn btn-primary" onclick="document.getElementById('courseVignetteInput').click()">Choisir une image…</button>
+            </div>
+        </div>
+    </div>
+    <input type="file" id="courseVignetteInput" accept="image/*" onchange="courseVignetteChoose(this)" style="display: none;">
+
     <!-- Input caché pour ouvrir un fichier MBZ -->
     <input type="file" id="openFileInput" accept=".mbz" onchange="loadMbzFile()" style="display: none;">
     
@@ -446,6 +482,7 @@ cleanupPdfPreviews();
         id: generateId(),
         name: 'Nouveau cours',
         shortname: 'cours1',
+        vignette: null,     // image du parcours dans Éléa : { url, name }
         sections: []
     };
     
@@ -522,6 +559,8 @@ cleanupPdfPreviews();
 
 <?php include __DIR__ . '/includes/editor/editor-import.js'; ?>
 
+<?php include __DIR__ . '/includes/editor/editor-vignette.js'; ?>
+
     // ==================== INITIALISATION ====================
     document.addEventListener('DOMContentLoaded', function() {
         // Synchroniser le nom du cours avec auto-save
@@ -529,6 +568,8 @@ cleanupPdfPreviews();
             courseData.name = this.value;
             onCourseModified();
         });
+
+        courseVignetteRefreshUI();
         
         // Vérifier si on doit charger un cours depuis le visualiseur
         const urlParams = new URLSearchParams(window.location.search);
@@ -745,7 +786,11 @@ cleanupPdfPreviews();
         // Réinitialiser les données
         courseData.name = importedCourse.name || 'Cours importé';
         courseData.sections = [];
-        
+        // Vignette du cours (image du parcours dans Éléa) : sans cette reprise, elle
+        // était perdue dès l'ouverture du cours, donc absente du .mbz réexporté.
+        courseData.vignette = importedCourse.vignette || null;
+        if (typeof courseVignetteRefreshUI === 'function') courseVignetteRefreshUI();
+
         document.getElementById('courseName').value = courseData.name;
         
         let importedCount = 0;

@@ -996,6 +996,40 @@ function exportDiagnostic($input) {
 /**
  * Parse un fichier MBZ pour import
  */
+/**
+ * Vignette du cours (image de la carte du parcours dans Éléa).
+ *
+ * Dans le .mbz c'est un fichier du CONTEXTE DU COURS : component « course »,
+ * filearea « overviewfiles ». Il n'appartient à aucune activité, donc rien ne le
+ * ramenait dans l'éditeur — et il disparaissait à l'export. Les fichiers ayant
+ * déjà été recopiés dans le dossier de la session, on se contente de retrouver
+ * l'URL correspondante.
+ *
+ * @return array{url:string,name:string}|null
+ */
+function findCourseVignette(array $mbzFiles, array $hashMapping, array $fileMapping): ?array {
+    foreach ($mbzFiles as $f) {
+        if (($f['component'] ?? '') !== 'course') continue;
+        if (($f['filearea'] ?? '') !== 'overviewfiles') continue;
+        $nom = $f['filename'] ?? '.';
+        if ($nom === '.' || $nom === '') continue;   // entrée de dossier
+
+        $hash = $f['hash'] ?? '';
+        $url = null;
+        if ($hash !== '' && isset($hashMapping[$hash])) {
+            $url = $hashMapping[$hash]['url'];
+        } elseif (isset($fileMapping[$nom])) {
+            $url = $fileMapping[$nom];
+        } else {
+            foreach ($fileMapping as $cle => $u) {
+                if (basename($cle) === $nom) { $url = $u; break; }
+            }
+        }
+        if ($url) return ['url' => $url, 'name' => $nom];
+    }
+    return null;
+}
+
 function parseMbz() {
     @set_time_limit(300);
     @ini_set('max_execution_time', '300');
@@ -1353,6 +1387,7 @@ function parseMbz() {
             'course' => [
                 'name' => $courseInfo['course_fullname'] ?? $courseInfo['fullname'] ?? $courseInfo['name'] ?? 'Cours importé',
                 'shortname' => $courseInfo['shortname'] ?? 'import',
+                'vignette' => findCourseVignette($mbzFiles, $hashMapping, $fileMapping),
                 'sections' => $editorSections
             ],
         ]);
@@ -1361,7 +1396,7 @@ function parseMbz() {
         if (!empty($progressId)) progressClear($progressId);
         echo json_encode(['error' => 'Erreur de parsing: ' . $e->getMessage()]);
     }
-    
+
     // Supprimer le dossier d'extraction temporaire (les fichiers sont copiés dans editor_uploads)
     if (!empty($extractDir) && is_dir($extractDir)) {
         deleteDirectory($extractDir);
@@ -5945,6 +5980,7 @@ function parseDriveMbz($input) {
             'course' => [
                 'name' => $courseInfo['course_fullname'] ?? $courseInfo['fullname'] ?? $courseInfo['name'] ?? 'Cours importé',
                 'shortname' => $courseInfo['shortname'] ?? 'import',
+                'vignette' => findCourseVignette($mbzFiles, $hashMapping, $fileMapping),
                 'sections' => $editorSections
             ]
         ]);
@@ -6292,6 +6328,7 @@ function parseLocalCourse($input) {
             'course' => [
                 'name' => $courseInfo['course_fullname'] ?? $courseInfo['fullname'] ?? $courseInfo['name'] ?? 'Cours importé',
                 'shortname' => $courseInfo['shortname'] ?? 'import',
+                'vignette' => findCourseVignette($mbzFiles, $hashMapping, $fileMapping),
                 'sections' => $editorSections
             ]
         ]);
@@ -7388,6 +7425,7 @@ function loadEditorSessionDraft($input) {
         'course' => [
             'name' => $data['name'] ?? 'Cours',
             'shortname' => $data['shortname'] ?? 'cours',
+            'vignette' => $data['vignette'] ?? null,
             'sections' => $data['sections'] ?? [],
         ]
     ], JSON_UNESCAPED_UNICODE);

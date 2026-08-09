@@ -88,6 +88,98 @@ body {
     background: var(--gray-100);
 }
 
+/* ---------- Vignette du cours (header) ---------- */
+.cvg-control {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem 0.25rem 0.75rem;
+    background: var(--gray-100);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.2s;
+    flex-shrink: 0;
+}
+.cvg-control:hover {
+    background: var(--gray-200);
+}
+.cvg-label {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--gray-700);
+    white-space: nowrap;
+}
+.cvg-mini {
+    width: 42px;
+    height: 30px;               /* 300 × 215 ≈ 42 × 30 */
+    border-radius: 4px;
+    object-fit: cover;
+    border: 1px solid var(--gray-300);
+    background: var(--gray-50);
+    flex-shrink: 0;
+}
+.cvg-mini--empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    color: var(--gray-400);
+    border-style: dashed;
+}
+
+/* ---------- Vignette du cours (modale) ---------- */
+.cvg-preview {
+    width: 300px;
+    height: 215px;
+    margin: 0 auto;
+    border: 2px dashed var(--gray-300);
+    border-radius: 8px;
+    background: var(--gray-50);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+.cvg-preview.cvg-dragover {
+    border-color: var(--primary);
+    background: var(--gray-100);
+}
+.cvg-preview img {
+    width: 300px;
+    height: 215px;
+    object-fit: cover;
+    display: block;
+}
+.cvg-placeholder {
+    text-align: center;
+    color: var(--gray-500);
+    font-size: 0.9rem;
+    padding: 0 1rem;
+}
+.cvg-placeholder-icon {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+}
+.cvg-placeholder-hint {
+    font-size: 0.8rem;
+    color: var(--gray-400);
+    margin-top: 0.4rem;
+}
+.cvg-info {
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--gray-600);
+    margin-top: 0.75rem;
+    word-break: break-word;
+}
+.cvg-help {
+    font-size: 0.8rem;
+    color: var(--gray-500);
+    margin: 0.75rem 0 0;
+    text-align: center;
+    line-height: 1.4;
+}
+
 /* Header commun des éditeurs d'activité */
 .ed-header {
     display: flex;
