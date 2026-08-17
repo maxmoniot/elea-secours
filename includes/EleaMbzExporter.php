@@ -45,6 +45,8 @@ class EleaMbzExporter {
     private $exportLogs = []; // Log messages for browser console
     private $droppedActivities = []; // Activités non exportables écartées (voir dropUnsupportedActivities)
     private $courseImageFileIds = []; // IDs files.xml de la vignette du cours (image + entrée dossier)
+    private $htmlFilesByArea = [];    // zone de fichiers => [contenthash => nom] (voir inlineHtmlFiles)
+    private $htmlDirEntryDone = [];   // zones ayant déjà leur entrée de dossier « . »
     private $unresolvedFiles = []; // Fichiers référencés introuvables partout (nom => true) — signalés au prof
     private $progressCb = null;      // Callback d'avancement (barre de progression du navigateur)
     
@@ -292,15 +294,25 @@ class EleaMbzExporter {
      */
     private function dropUnsupportedActivities(): array {
         $dropped = [];
-        $handled = ['mapmodules' => 1, 'assign' => 1, 'resource' => 1, 'quiz' => 1];
+        // Modules Moodle que l'exporteur sait écrire tels quels
+        $handled = ['mapmodules' => 1, 'assign' => 1, 'resource' => 1, 'quiz' => 1,
+                    'label' => 1, 'page' => 1];
+        // Types qui SONT du H5P : eux seuls ont le droit de partir en activité hvp.
+        // Sans ce filtre, un module Moodle inconnu (qbank, url, forum…) sortait en
+        // « H5P.qbank », « H5P.url »… : une bibliothèque qui n'existe pas, donc une
+        // activité vide et cassée dans Éléa (constaté sur l'étiquette d'accueil).
+        $h5p = ['h5pactivity' => 1, 'hvp' => 1, '' => 1];
 
         foreach ($this->data['sections'] ?? [] as $sIdx => $section) {
             $kept = [];
             foreach ($section['activities'] ?? [] as $activity) {
                 $type = $activity['type'] ?? 'h5pactivity';
-                $content = $activity['content'] ?? null;
-                if (!isset($handled[$type]) && $content !== null && !is_array($content)) {
+                if (!isset($handled[$type]) && !isset($h5p[$type])) {
                     $name = $activity['name'] ?? '?';
+                    // La banque de questions de Moodle 5 n'est pas du contenu de prof :
+                    // elle traînait dans les anciens brouillons, on la retire sans le
+                    // signaler (Éléa recrée la sienne à l'import).
+                    if ($type === 'qbank') continue;
                     $dropped[] = ['type' => $type, 'name' => $name];
                     $this->logExport("Activité écartée de l'export (type « $type » non pris en charge) : $name");
                     error_log("EleaMbzExporter: activité écartée (type $type non pris en charge) : $name");
@@ -578,6 +590,12 @@ class EleaMbzExporter {
                 } elseif ($activityType === 'resource') {
                     $moduleName = 'resource';
                     $dirPrefix = 'resource';
+                } elseif ($activityType === 'label') {
+                    $moduleName = 'label';
+                    $dirPrefix = 'label';
+                } elseif ($activityType === 'page') {
+                    $moduleName = 'page';
+                    $dirPrefix = 'page';
                 } elseif ($activityType === 'quiz' || $isEvalQuiz) {
                     $moduleName = 'quiz';
                     $dirPrefix = 'quiz';
@@ -1096,7 +1114,8 @@ class EleaMbzExporter {
         }
         $catRefXml .= "\n  </question_categoryref>";
         
-        // 1. Mettre à jour chaque quiz inforef.xml
+        // 1. Mettre à jour chaque quiz inforef.xml — sans oublier ses propres fichiers
+        // (images de la consigne), sinon cette réécriture les déréférence.
         foreach ($this->quizActivityDirs as $quiz) {
             $xml = '<?xml version="1.0" encoding="UTF-8"?>
 <inforef>
@@ -1104,7 +1123,7 @@ class EleaMbzExporter {
     <grade_item>
       <id>' . $quiz['gradeItemId'] . '</id>
     </grade_item>
-  </grade_itemref>' . $catRefXml . '
+  </grade_itemref>' . $catRefXml . $this->filerefXml($quiz['fileIds'] ?? []) . '
 </inforef>';
             $this->writeFile($quiz['dir'] . '/inforef.xml', $xml);
         }
@@ -1755,7 +1774,11 @@ class EleaMbzExporter {
                 } elseif ($activityType === 'resource') {
                     @file_put_contents(TMP_PATH . '/.export_progress.log', date('H:i:s') . " ROUTE: actId=$activityId type=RESOURCE name='{$activity['name']}'\n", FILE_APPEND | LOCK_EX);
                     $this->generateResourceActivity($activityId, $sectionId, $sIdx, $activity);
-                } elseif ($activityType === 'h5pactivity' && ($activity['h5pType'] ?? '') === 'QuestionSet' 
+                } elseif ($activityType === 'label') {
+                    $this->generateLabelActivity($activityId, $sectionId, $sIdx, $activity);
+                } elseif ($activityType === 'page') {
+                    $this->generatePageActivity($activityId, $sectionId, $sIdx, $activity);
+                } elseif ($activityType === 'h5pactivity' && ($activity['h5pType'] ?? '') === 'QuestionSet'
                     && $this->isNewFormatQuestionSet($activity)) {
                     $this->generateEvalQuizActivity($activityId, $sectionId, $sIdx, $activity);
                 } elseif ($activityType === 'quiz') {
@@ -1778,8 +1801,13 @@ class EleaMbzExporter {
         $mapPath = $activity['mapPath'] ?? '';
         $iconset = $activity['iconset'] ?? 4;
         $buttonWidth = $activity['buttonWidth'] ?? 50;
-        $descHeader = $activity['descriptionHeader'] ?? '';
-        $descFooter = $activity['descriptionFooter'] ?? '';
+        // Textes autour de la carte : ils peuvent contenir des images (même traitement
+        // que les autres consignes — sinon l'URL elea-secours partait telle quelle).
+        $mapIntroFileIds = [];
+        $descHeader = $this->inlineHtmlFiles($activity['descriptionHeader'] ?? '', $contextId,
+                                             'mod_mapmodules', 'intro', $mapIntroFileIds);
+        $descFooter = $this->inlineHtmlFiles($activity['descriptionFooter'] ?? '', $contextId,
+                                             'mod_mapmodules', 'intro', $mapIntroFileIds);
         $now = time();
         $gameId = 'game' . $activityId;
         
@@ -1981,20 +2009,12 @@ class EleaMbzExporter {
 </activity_gradebook>';
         $this->writeFile($activityDir . '/grades.xml', $gradesXml);
         
-        // inforef.xml
-        $filerefXml = '';
+        // inforef.xml : image de fond personnalisée + images des textes autour
+        $refs = $mapIntroFileIds;
         if (!empty($customImageFilename)) {
-            // Ajouter les références aux fichiers image (fichier + entrée répertoire)
-            $filerefXml = '
-  <fileref>
-    <file>
-      <id>' . $fileId . '</id>
-    </file>
-    <file>
-      <id>' . $dirFileId . '</id>
-    </file>
-  </fileref>';
+            array_unshift($refs, $fileId, $dirFileId);
         }
+        $filerefXml = $this->filerefXml($refs);
         $inforefXml = '<?xml version="1.0" encoding="UTF-8"?>
 <inforef>' . $filerefXml . '
   <grade_itemref>
@@ -2096,72 +2116,11 @@ class EleaMbzExporter {
             ];
         }
         
-        // Gérer l'intro (description) et ses images
-        $intro = $activity['intro'] ?? '';
-        $introXml = '';
-        if (!empty($intro)) {
-            $self = $this;
-            $introXml = preg_replace_callback(
-                // Tolère un param session AVANT ou APRÈS file= (URLs stampées par le parse,
-                // _healLh3Urls ou loadEditorSessionDraft) et le CONSOMME pour qu'il ne
-                // reste pas incrusté dans le HTML après remplacement.
-                '/api\/editor_api\.php\?action=serve_upload(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?&(?:amp;)?file=([^\"\x27<>\s&]+)(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?/',
-                function($m) use ($self, $contextId) {
-                    $encodedName = $m[1];
-                    $localFile = $self->findFileMultiPath(urldecode($encodedName));
-                    if (!$localFile) return $m[0];
-                    
-                    $hash = sha1_file($localFile);
-                    $size = filesize($localFile);
-                    $mime = 'image/png';
-                    if (function_exists('mime_content_type')) {
-                        $mime = mime_content_type($localFile) ?: 'image/png';
-                    }
-                    
-                    $origName = urldecode($encodedName);
-                    $origName = preg_replace('/^import_\d+_[a-f0-9]+\./', 'image.', $origName);
-                    
-                    $hashPrefix = substr($hash, 0, 2);
-                    $filesSubDir = $self->exportDir . '/files/' . $hashPrefix;
-                    if (!is_dir($filesSubDir)) mkdir($filesSubDir, 0777, true);
-                    copy($localFile, $filesSubDir . '/' . $hash);
-                    
-                    $fid = $self->fileId++;
-                    $self->filesManifest[] = [
-                        'id' => $fid,
-                        'contenthash' => $hash,
-                        'contextid' => $contextId,
-                        'component' => 'mod_assign',
-                        'filearea' => 'intro',
-                        'itemid' => 0,
-                        'filepath' => '/',
-                        'filename' => $origName,
-                        'filesize' => $size,
-                        'mimetype' => $mime,
-                    ];
-                    
-                    $self->archiveIndex[] = "files/{$hashPrefix}/\td\t0\t?";
-                    $self->archiveIndex[] = "files/{$hashPrefix}/{$hash}\tf\t{$size}\t" . $self->backupDate;
-                    
-                    return '@@PLUGINFILE@@/' . $origName;
-                },
-                $intro
-            );
-            
-            $dirFid = $this->fileId++;
-            $this->filesManifest[] = [
-                'id' => $dirFid,
-                'contenthash' => 'da39a3ee5e6b4b0d3255bfef95601890afd80709',
-                'contextid' => $contextId,
-                'component' => 'mod_assign',
-                'filearea' => 'intro',
-                'itemid' => 0,
-                'filepath' => '/',
-                'filename' => '.',
-                'filesize' => 0,
-                'mimetype' => '$@NULL@$',
-            ];
-        }
+        // Consigne (intro) et ses images. Les IDs partent dans $fileIds, donc dans le
+        // <fileref> de l'inforef du devoir : sans ça Moodle ne restaure tout simplement
+        // pas ces images (le devoir s'affichait sans ses captures sur Éléa).
+        $introXml = $this->inlineHtmlFiles($activity['intro'] ?? '', $contextId,
+                                           'mod_assign', 'intro', $fileIds);
         
         // assign.xml
         $pcId = $assignId * 10;
@@ -2459,74 +2418,11 @@ class EleaMbzExporter {
             'mimetype' => '$@NULL@$',
         ];
         
-        // Gérer l'intro (description) et ses images
-        $intro = $activity['intro'] ?? '';
-        $introXml = '';
-        if (!empty($intro)) {
-            $self = $this;
-            $introXml = preg_replace_callback(
-                // Tolère un param session AVANT ou APRÈS file= et le consomme (cf. l'autre
-                // site identique plus haut).
-                '/api\/editor_api\.php\?action=serve_upload(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?&(?:amp;)?file=([^"\x27<>\s&]+)(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?/',
-                function($m) use ($self, $contextId, &$fileIds) {
-                    $encodedName = $m[1];
-                    $localFile = $self->findFileMultiPath(urldecode($encodedName));
-                    if (!$localFile) return $m[0];
-                    
-                    $hash = sha1_file($localFile);
-                    $size = filesize($localFile);
-                    $mime = 'image/png';
-                    if (function_exists('mime_content_type')) {
-                        $mime = mime_content_type($localFile) ?: 'image/png';
-                    }
-                    
-                    $origName = urldecode($encodedName);
-                    $origName = preg_replace('/^import_\d+_[a-f0-9]+\./', 'image.', $origName);
-                    
-                    $hashPrefix = substr($hash, 0, 2);
-                    $filesSubDir = $self->exportDir . '/files/' . $hashPrefix;
-                    if (!is_dir($filesSubDir)) mkdir($filesSubDir, 0777, true);
-                    copy($localFile, $filesSubDir . '/' . $hash);
-                    
-                    $fid = $self->fileId++;
-                    $fileIds[] = $fid;
-                    $self->filesManifest[] = [
-                        'id' => $fid,
-                        'contenthash' => $hash,
-                        'contextid' => $contextId,
-                        'component' => 'mod_resource',
-                        'filearea' => 'intro',
-                        'itemid' => 0,
-                        'filepath' => '/',
-                        'filename' => $origName,
-                        'filesize' => $size,
-                        'mimetype' => $mime,
-                    ];
-                    
-                    $self->archiveIndex[] = "files/{$hashPrefix}/\td\t0\t?";
-                    $self->archiveIndex[] = "files/{$hashPrefix}/{$hash}\tf\t{$size}\t" . $self->backupDate;
-                    
-                    return '@@PLUGINFILE@@/' . $origName;
-                },
-                $intro
-            );
-            
-            $introDirFid = $this->fileId++;
-            $fileIds[] = $introDirFid;
-            $this->filesManifest[] = [
-                'id' => $introDirFid,
-                'contenthash' => 'da39a3ee5e6b4b0d3255bfef95601890afd80709',
-                'contextid' => $contextId,
-                'component' => 'mod_resource',
-                'filearea' => 'intro',
-                'itemid' => 0,
-                'filepath' => '/',
-                'filename' => '.',
-                'filesize' => 0,
-                'mimetype' => '$@NULL@$',
-            ];
-        }
-        
+        // Consigne (intro) et ses images — même traitement que partout ailleurs :
+        // nom = empreinte du contenu, une seule entrée par image, IDs dans le fileref.
+        $introXml = $this->inlineHtmlFiles($activity['intro'] ?? '', $contextId,
+                                           'mod_resource', 'intro', $fileIds);
+
         // resource.xml
         $resourceXml = '<?xml version="1.0" encoding="UTF-8"?>
 <activity id="' . $resourceId . '" moduleid="' . $activityId . '" modulename="resource" contextid="' . $contextId . '">
@@ -2600,6 +2496,274 @@ class EleaMbzExporter {
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<filters>\n  <filter_actives>\n  </filter_actives>\n  <filter_configs>\n  </filter_configs>\n</filters>");
     }
     
+    /**
+     * Réécrit un HTML de l'éditeur pour Moodle : chaque image servie par
+     * serve_upload est copiée dans l'archive, déclarée dans files.xml pour la zone
+     * demandée, et son URL remplacée par @@PLUGINFILE@@/<nom>.
+     * Renvoie le HTML prêt à écrire ; $fileIds reçoit les IDs à mettre en fileref.
+     */
+    private function inlineHtmlFiles(string $html, int $contextId, string $component,
+                                     string $filearea, array &$fileIds): string {
+        if ($html === '') return '';
+        $self = $this;
+        $zone = $contextId . '|' . $component . '|' . $filearea;
+        $trouve = false;
+
+        $sortie = preg_replace_callback(
+            // Le paramètre session peut précéder ou suivre file= (les deux existent
+            // dans les cours déjà enregistrés) : on l'absorbe dans les deux sens.
+            '/api\/editor_api\.php\?action=serve_upload(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?&(?:amp;)?file=([^"\x27<>\s&]+)(?:&(?:amp;)?session=[a-zA-Z0-9_-]+)?/',
+            function ($m) use ($self, $contextId, $component, $filearea, $zone, &$fileIds, &$trouve) {
+                $localFile = $self->findFileMultiPath(urldecode($m[1]));
+                if (!$localFile || !file_exists($localFile)) return $m[0];
+
+                $hash = sha1_file($localFile);
+
+                // Même image citée deux fois dans le même texte : UNE seule entrée.
+                // Deux entrées de même nom dans une zone = sauvegarde invalide, et
+                // Moodle abandonne alors TOUTE la zone (toutes les images de la
+                // consigne disparaissent — constaté le 17/08/2026 sur un devoir).
+                if (isset($self->htmlFilesByArea[$zone][$hash])) {
+                    $trouve = true;
+                    return '@@PLUGINFILE@@/' . rawurlencode($self->htmlFilesByArea[$zone][$hash]);
+                }
+
+                $size = filesize($localFile);
+                $mime = function_exists('mime_content_type')
+                    ? (mime_content_type($localFile) ?: 'image/png') : 'image/png';
+
+                $nom = $self->moodleFileName(urldecode($m[1]), $hash, $mime);
+
+                $prefix = substr($hash, 0, 2);
+                $dest = $self->exportDir . '/files/' . $prefix;
+                if (!is_dir($dest)) mkdir($dest, 0777, true);
+                if (!file_exists($dest . '/' . $hash)) copy($localFile, $dest . '/' . $hash);
+
+                $fid = $self->fileId++;
+                $fileIds[] = $fid;
+                $self->filesManifest[] = [
+                    'id' => $fid,
+                    'contenthash' => $hash,
+                    'contextid' => $contextId,
+                    'component' => $component,
+                    'filearea' => $filearea,
+                    'itemid' => 0,
+                    'filepath' => '/',
+                    'filename' => $nom,
+                    'filesize' => $size,
+                    'mimetype' => $mime,
+                    'source' => $nom,
+                ];
+                $self->archiveIndex[] = "files/\td\t0\t?";
+                $self->archiveIndex[] = "files/{$prefix}/\td\t0\t?";
+                $self->archiveIndex[] = "files/{$prefix}/{$hash}\tf\t{$size}\t" . $self->backupDate;
+
+                $self->htmlFilesByArea[$zone][$hash] = $nom;
+                $trouve = true;
+                return '@@PLUGINFILE@@/' . rawurlencode($nom);
+            },
+            $html
+        );
+
+        // Entrée de dossier « . » : Moodle l'attend dès qu'une zone contient un
+        // fichier, et une seule fois par zone.
+        if ($trouve && !isset($this->htmlDirEntryDone[$zone])) {
+            $this->htmlDirEntryDone[$zone] = true;
+            $dirFid = $this->fileId++;
+            $fileIds[] = $dirFid;
+            $this->filesManifest[] = [
+                'id' => $dirFid,
+                'contenthash' => 'da39a3ee5e6b4b0d3255bfef95601890afd80709',
+                'contextid' => $contextId,
+                'component' => $component,
+                'filearea' => $filearea,
+                'itemid' => 0,
+                'filepath' => '/',
+                'filename' => '.',
+                'filesize' => 0,
+                'mimetype' => '$@NULL@$',
+            ];
+        }
+
+        return $sortie;
+    }
+
+    /**
+     * Bloc <fileref> d'un inforef.xml. Moodle ne restaure QUE les fichiers cités ici :
+     * une image absente de cette liste n'arrive jamais sur Éléa, même présente dans
+     * files.xml et dans l'archive.
+     */
+    /**
+     * Nom d'un fichier tel que Moodle/Éléa le nomme quand l'image vient d'un éditeur :
+     * l'empreinte du contenu + l'extension. Unique par construction, et deux fois la
+     * même image donne le même nom (donc une seule entrée dans files.xml).
+     * Les noms techniques d'elea-secours (import_…, <idDrive>_prefetch.bin) n'ont
+     * aucun sens côté professeur et leur extension est parfois fausse.
+     */
+    private function moodleFileName(string $nomSource, string $contenthash, string $mime): string {
+        $ext = strtolower(pathinfo($nomSource, PATHINFO_EXTENSION));
+        $parMime = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif',
+                    'image/webp' => 'webp', 'image/svg+xml' => 'svg'];
+        if ($ext === '' || $ext === 'bin' || strlen($ext) > 5) {
+            $ext = $parMime[$mime] ?? 'png';
+        }
+        return $contenthash . '.' . $ext;
+    }
+
+    private function filerefXml(array $fileIds): string {
+        if (empty($fileIds)) return '';
+        $xml = "\n  <fileref>";
+        foreach (array_unique($fileIds) as $fid) {
+            $xml .= "\n    <file>\n      <id>{$fid}</id>\n    </file>";
+        }
+        return $xml . "\n  </fileref>";
+    }
+
+    /** Fichiers XML communs à tous les modules simples (pas de notes, pas de rôles). */
+    private function writeModuleAuxFiles(string $activityDir, array $fileIds): void {
+        $filerefXml = $this->filerefXml($fileIds);
+        $this->writeFile($activityDir . '/inforef.xml',
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<inforef>{$filerefXml}\n</inforef>");
+        $this->writeFile($activityDir . '/grades.xml',
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<activity_gradebook>\n  <grade_items>\n  </grade_items>\n  <grade_letters>\n  </grade_letters>\n</activity_gradebook>");
+        $this->writeFile($activityDir . '/grade_history.xml',
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<grade_history>\n  <grade_grades>\n  </grade_grades>\n</grade_history>");
+        $this->writeFile($activityDir . '/roles.xml',
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<roles>\n  <role_overrides>\n  </role_overrides>\n  <role_assignments>\n  </role_assignments>\n</roles>");
+        $this->writeFile($activityDir . '/filters.xml',
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<filters>\n  <filter_actives>\n  </filter_actives>\n  <filter_configs>\n  </filter_configs>\n</filters>");
+    }
+
+    /**
+     * Étiquette (module Moodle « label ») : le texte affiché directement sur la page
+     * du parcours, comme le « Bonjour, faites les activités ci-dessous… » d'Éléa.
+     * Tout est dans l'intro, et c'est showdescription=1 qui la fait afficher.
+     */
+    private function generateLabelActivity($activityId, $sectionId, $sectionNumber, $activity) {
+        $activityDir = 'activities/label_' . $activityId;
+        mkdir($this->exportDir . '/' . $activityDir, 0777, true);
+
+        $contextId = $this->contextId + $activityId + 1;
+        $labelId = $activityId + 6000;
+        $now = time();
+        $fileIds = [];
+
+        // Le texte de l'étiquette : « intro » dans le .mbz. On tolère « content »
+        // (chaîne) pour les brouillons qui l'auraient rangé là.
+        $texte = $activity['intro'] ?? '';
+        if ($texte === '' && isset($activity['content']) && is_string($activity['content'])) {
+            $texte = $activity['content'];
+        }
+        $texte = $this->inlineHtmlFiles($texte, $contextId, 'mod_label', 'intro', $fileIds);
+
+        $xml = '<?xml version="1.0" encoding="UTF-8"?>
+<activity id="' . $labelId . '" moduleid="' . $activityId . '" modulename="label" contextid="' . $contextId . '">
+  <label id="' . $labelId . '">
+    <name>' . $this->xmlEncode($activity['name'] ?? 'Étiquette') . '</name>
+    <intro>' . $this->xmlEncode($texte) . '</intro>
+    <introformat>1</introformat>
+    <timemodified>' . $now . '</timemodified>
+  </label>
+</activity>';
+        $this->writeFile($activityDir . '/label.xml', $xml);
+
+        $this->writeFile($activityDir . '/module.xml', '<?xml version="1.0" encoding="UTF-8"?>
+<module id="' . $activityId . '" version="2024100700">
+  <modulename>label</modulename>
+  <sectionid>' . $sectionId . '</sectionid>
+  <sectionnumber>' . $sectionNumber . '</sectionnumber>
+  <idnumber></idnumber>
+  <added>' . $now . '</added>
+  <score>0</score>
+  <indent>0</indent>
+  <visible>' . ($activity['_moduleVisible'] ?? 1) . '</visible>
+  <visibleoncoursepage>1</visibleoncoursepage>
+  <visibleold>' . ($activity['_moduleVisibleold'] ?? 1) . '</visibleold>
+  <groupmode>0</groupmode>
+  <groupingid>0</groupingid>
+  <completion>0</completion>
+  <completiongradeitemnumber>$@NULL@$</completiongradeitemnumber>
+  <completionpassgrade>0</completionpassgrade>
+  <completionview>0</completionview>
+  <completionexpected>0</completionexpected>
+  <availability>$@NULL@$</availability>
+  <showdescription>1</showdescription>
+  <downloadcontent>1</downloadcontent>
+  <lang></lang>
+  <tags>
+  </tags>
+</module>');
+
+        $this->writeModuleAuxFiles($activityDir, $fileIds);
+    }
+
+    /**
+     * Page (module Moodle « page ») : une page de contenu HTML, ouverte depuis le
+     * parcours. Le corps est dans <content> (zone de fichiers « content »),
+     * l'intro sert de description facultative.
+     */
+    private function generatePageActivity($activityId, $sectionId, $sectionNumber, $activity) {
+        $activityDir = 'activities/page_' . $activityId;
+        mkdir($this->exportDir . '/' . $activityDir, 0777, true);
+
+        $contextId = $this->contextId + $activityId + 1;
+        $pageId = $activityId + 7000;
+        $now = time();
+        $fileIds = [];
+
+        $corps = $activity['content'] ?? '';
+        if (is_array($corps)) $corps = '';   // une page n'a jamais de contenu H5P
+        $corps = $this->inlineHtmlFiles($corps, $contextId, 'mod_page', 'content', $fileIds);
+        $intro = $this->inlineHtmlFiles($activity['intro'] ?? '', $contextId, 'mod_page', 'intro', $fileIds);
+
+        $xml = '<?xml version="1.0" encoding="UTF-8"?>
+<activity id="' . $pageId . '" moduleid="' . $activityId . '" modulename="page" contextid="' . $contextId . '">
+  <page id="' . $pageId . '">
+    <name>' . $this->xmlEncode($activity['name'] ?? 'Page') . '</name>
+    <intro>' . $this->xmlEncode($intro) . '</intro>
+    <introformat>1</introformat>
+    <content>' . $this->xmlEncode($corps) . '</content>
+    <contentformat>1</contentformat>
+    <legacyfiles>0</legacyfiles>
+    <legacyfileslast>$@NULL@$</legacyfileslast>
+    <display>5</display>
+    <displayoptions>a:2:{s:10:"printintro";s:1:"0";s:17:"printlastmodified";s:1:"0";}</displayoptions>
+    <revision>1</revision>
+    <timemodified>' . $now . '</timemodified>
+  </page>
+</activity>';
+        $this->writeFile($activityDir . '/page.xml', $xml);
+
+        $this->writeFile($activityDir . '/module.xml', '<?xml version="1.0" encoding="UTF-8"?>
+<module id="' . $activityId . '" version="2024100700">
+  <modulename>page</modulename>
+  <sectionid>' . $sectionId . '</sectionid>
+  <sectionnumber>' . $sectionNumber . '</sectionnumber>
+  <idnumber></idnumber>
+  <added>' . $now . '</added>
+  <score>0</score>
+  <indent>0</indent>
+  <visible>' . ($activity['_moduleVisible'] ?? 1) . '</visible>
+  <visibleoncoursepage>1</visibleoncoursepage>
+  <visibleold>' . ($activity['_moduleVisibleold'] ?? 1) . '</visibleold>
+  <groupmode>0</groupmode>
+  <groupingid>0</groupingid>
+  <completion>2</completion>
+  <completiongradeitemnumber>$@NULL@$</completiongradeitemnumber>
+  <completionpassgrade>0</completionpassgrade>
+  <completionview>1</completionview>
+  <completionexpected>0</completionexpected>
+  <availability>$@NULL@$</availability>
+  <showdescription>0</showdescription>
+  <downloadcontent>1</downloadcontent>
+  <lang></lang>
+  <tags>
+  </tags>
+</module>');
+
+        $this->writeModuleAuxFiles($activityDir, $fileIds);
+    }
+
     private function generateH5pActivity($activityId, $sectionId, $sectionNumber, $activity) {
         $activityDir = 'activities/hvp_' . $activityId;
         mkdir($this->exportDir . '/' . $activityDir, 0777, true);
@@ -2624,6 +2788,12 @@ class EleaMbzExporter {
         // TOUJOURS créer l'entrée répertoire racine "/" pour cette activité H5P
         // Moodle en a besoin même s'il n'y a pas de fichiers embarqués
         $this->ensureRootDirectoryEntry($contextId, $hvpId, $activityFileIds);
+
+        // Consigne affichée au-dessus de l'activité : elle peut contenir des images.
+        // Sans ce traitement, l'URL serve_upload d'elea-secours restait telle quelle
+        // dans le .mbz → image absente sur Éléa (alors qu'elle s'affiche encore ici).
+        $introHvp = $this->inlineHtmlFiles($activity['intro'] ?? '', $contextId,
+                                           'mod_hvp', 'intro', $activityFileIds);
 
         // CEINTURE DE SÉCURITÉ : le validateur H5P de Moodle/Éléa (PHP 8) plante fatalement
         // (« Attempt to assign property "path" on null » dans _validateFilelike) sur toute
@@ -2676,7 +2846,7 @@ class EleaMbzExporter {
     <machine_name>' . $machineName . '</machine_name>
     <major_version>' . $version['major'] . '</major_version>
     <minor_version>' . $version['minor'] . '</minor_version>
-    <intro>' . $this->xmlEncode($activity['intro'] ?? '') . '</intro>
+    <intro>' . $this->xmlEncode($introHvp) . '</intro>
     <introformat>1</introformat>
     <json_content>' . $this->xmlEncodeJson($jsonContent) . '</json_content>
     <embed_type>div</embed_type>
@@ -2834,10 +3004,14 @@ class EleaMbzExporter {
         $content = $activity['content'] ?? [];
         
         $name = $this->xmlEncode($activity['name'] ?? 'Quiz');
-        $intro = $content['intro'] ?? '';
+        $intro = $content['intro'] ?? ($activity['intro'] ?? '');
         if (!empty($intro) && strpos($intro, '<') === false) {
             $intro = '<p>' . htmlspecialchars($intro) . '</p>';
         }
+        // Images de la consigne : copiées dans l'archive et référencées, sinon l'URL
+        // elea-secours restait incrustée et l'image manquait sur Éléa.
+        $quizFileIds = [];
+        $intro = $this->inlineHtmlFiles($intro, $contextId, 'mod_quiz', 'intro', $quizFileIds);
         $attemptsNumber = $content['attempts_number'] ?? 1;
         $preferredBehaviour = $content['preferredbehaviour'] ?? 'deferredfeedback';
         $questionsPerPage = $content['questionsperpage'] ?? 1;
@@ -3128,10 +3302,10 @@ class EleaMbzExporter {
     <grade_item>
       <id>' . $gradeItemId . '</id>
     </grade_item>
-  </grade_itemref>
+  </grade_itemref>' . $this->filerefXml($quizFileIds) . '
 </inforef>';
         $this->writeFile($activityDir . '/inforef.xml', $xml);
-        
+
         // filters.xml
         $xml = '<?xml version="1.0" encoding="UTF-8"?>
 <filters>
@@ -3157,7 +3331,8 @@ class EleaMbzExporter {
             'dir' => $activityDir,
             'gradeItemId' => $gradeItemId,
             'contextId' => $contextId,
-            'activityId' => $activityId
+            'activityId' => $activityId,
+            'fileIds' => $quizFileIds,
         ];
     }
     
@@ -3186,6 +3361,11 @@ class EleaMbzExporter {
         $questions = $content['questions'] ?? [];
         
         $name = $this->xmlEncode($activity['name'] ?? 'Évaluation');
+        // Consigne de l'évaluation : elle était purement perdue (<intro></intro> en dur),
+        // images comprises.
+        $introEval = $activity['intro'] ?? ($content['intro'] ?? '');
+        $quizFileIds = [];
+        $introEval = $this->inlineHtmlFiles($introEval, $contextId, 'mod_quiz', 'intro', $quizFileIds);
         $attemptsNumber = $settings['attempts_number'] ?? 1;
         $preferredBehaviour = $settings['preferredbehaviour'] ?? 'deferredfeedback';
         $questionsPerPage = $settings['questionsperpage'] ?? 1;
@@ -3332,7 +3512,7 @@ class EleaMbzExporter {
 <activity id="' . $quizId . '" moduleid="' . $activityId . '" modulename="quiz" contextid="' . $contextId . '">
   <quiz id="' . $quizId . '">
     <name>' . $name . '</name>
-    <intro></intro>
+    <intro>' . $this->xmlEncode($introEval) . '</intro>
     <introformat>1</introformat>
     <timeopen>0</timeopen>
     <timeclose>0</timeclose>
@@ -3510,7 +3690,7 @@ class EleaMbzExporter {
     <grade_item>
       <id>' . $gradeItemId . '</id>
     </grade_item>
-  </grade_itemref>
+  </grade_itemref>' . $this->filerefXml($quizFileIds) . '
 </inforef>';
         $this->writeFile($activityDir . '/inforef.xml', $xml);
         
@@ -3519,7 +3699,8 @@ class EleaMbzExporter {
             'dir' => $activityDir,
             'gradeItemId' => $gradeItemId,
             'contextId' => $contextId,
-            'activityId' => $activityId
+            'activityId' => $activityId,
+            'fileIds' => $quizFileIds,
         ];
     }
     private function addQuestionToBank($q, $bankEntryId, $contextId, $courseId) {
@@ -3566,7 +3747,10 @@ class EleaMbzExporter {
                 $contenthash = sha1($fileContent);
                 $filesize = strlen($fileContent);
                 $mime = mime_content_type($localPath) ?: 'image/png';
-                
+                // Nom à la mode Moodle : les images venues du Drive arrivaient sous le
+                // nom du cache de téléchargement (« <idDrive>_prefetch.bin »).
+                $imgFilename = $this->moodleFileName($imgFilename, $contenthash, $mime);
+
                 // Copier dans files/XX/contenthash
                 $hashPrefix = substr($contenthash, 0, 2);
                 $destDir = $this->filesDir . '/' . $hashPrefix;
@@ -3958,14 +4142,23 @@ class EleaMbzExporter {
                     return $matches[0]; // Garder tel quel si non trouvé
                 }
                 
-                // Déterminer le nom de fichier
-                $imgFilename = basename($localPath);
-                
                 // Lire et copier dans l'archive
                 $fileContent = file_get_contents($localPath);
                 $contenthash = sha1($fileContent);
                 $filesize = strlen($fileContent);
                 $mime = @mime_content_type($localPath) ?: 'image/png';
+
+                // Même image citée deux fois dans le même énoncé : une seule entrée.
+                // Deux entrées de même nom dans une zone = sauvegarde invalide et
+                // Moodle abandonne toute la zone (toutes les images de la question).
+                $zoneQ = $contextId . '|question|' . $filearea . '|' . $questionId;
+                if (isset($this->htmlFilesByArea[$zoneQ][$contenthash])) {
+                    $nomDeja = $this->htmlFilesByArea[$zoneQ][$contenthash];
+                    $attrs = $beforeSrc . $afterSrc;
+                    return '<img ' . $beforeSrc . 'src="@@PLUGINFILE@@/' . htmlspecialchars($nomDeja) . '"' . $afterSrc . '>';
+                }
+                $imgFilename = $this->moodleFileName(basename($localPath), $contenthash, $mime);
+                $this->htmlFilesByArea[$zoneQ][$contenthash] = $imgFilename;
                 
                 $hashPrefix = substr($contenthash, 0, 2);
                 $destDir = $this->filesDir . '/' . $hashPrefix;
@@ -3993,21 +4186,24 @@ class EleaMbzExporter {
                 ];
                 $questionFileIds[] = $fileId;
                 
-                // Entrée répertoire "."
-                $dirFileId = $this->fileId++;
-                $this->filesManifest[] = [
-                    'id' => $dirFileId,
-                    'contenthash' => 'da39a3ee5e6b4b0d3255bfef95601890afd80709',
-                    'contextid' => $contextId,
-                    'component' => 'question',
-                    'filearea' => $filearea,
-                    'itemid' => $questionId,
-                    'filepath' => '/',
-                    'filename' => '.',
-                    'filesize' => 0,
-                    'mimetype' => '$@NULL@$',
-                ];
-                $questionFileIds[] = $dirFileId;
+                // Entrée répertoire "." (une seule par zone)
+                if (!isset($this->htmlDirEntryDone[$zoneQ])) {
+                    $this->htmlDirEntryDone[$zoneQ] = true;
+                    $dirFileId = $this->fileId++;
+                    $this->filesManifest[] = [
+                        'id' => $dirFileId,
+                        'contenthash' => 'da39a3ee5e6b4b0d3255bfef95601890afd80709',
+                        'contextid' => $contextId,
+                        'component' => 'question',
+                        'filearea' => $filearea,
+                        'itemid' => $questionId,
+                        'filepath' => '/',
+                        'filename' => '.',
+                        'filesize' => 0,
+                        'mimetype' => '$@NULL@$',
+                    ];
+                    $questionFileIds[] = $dirFileId;
+                }
                 
                 // Reconstruire le tag img avec @@PLUGINFILE@@
                 // Préserver width/height et autres attributs

@@ -264,6 +264,11 @@ class MbzParser {
                 'lesson' => $this->parseLessonActivity($activityPath, $moduleId),
                 'mapmodules' => $this->parseMapmodulesActivity($activityPath, $moduleId),
                 'assign' => $this->parseAssignActivity($activityPath, $moduleId),
+                // « qbank » n'est pas une activité : c'est la banque de questions que
+                // Moodle 5 / Éléa crée automatiquement dans chaque cours (elle arrive
+                // dans toute sauvegarde). L'afficher comme une activité « Activité
+                // qbank » n'a aucun sens pour le professeur.
+                'qbank' => null,
                 default => $this->parseGenericActivity($activityPath, $moduleId, $type),
             };
             

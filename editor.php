@@ -387,6 +387,16 @@ cleanupPdfPreviews();
                         <div class="activity-type-name">Fichiers à distribuer</div>
                         <div class="activity-type-desc">Fichiers téléchargeables par les élèves</div>
                     </div>
+                    <div class="activity-type-card" onclick="selectActivityType(this)" data-type="label">
+                        <div class="activity-type-icon">💬</div>
+                        <div class="activity-type-name">Étiquette</div>
+                        <div class="activity-type-desc">Texte affiché directement dans le parcours</div>
+                    </div>
+                    <div class="activity-type-card" onclick="selectActivityType(this)" data-type="page">
+                        <div class="activity-type-icon">📄</div>
+                        <div class="activity-type-name">Page</div>
+                        <div class="activity-type-desc">Page de contenu à ouvrir</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -560,6 +570,8 @@ cleanupPdfPreviews();
 <?php include __DIR__ . '/includes/editor/editor-import.js'; ?>
 
 <?php include __DIR__ . '/includes/editor/editor-vignette.js'; ?>
+
+<?php include __DIR__ . '/includes/editor/editor-text-modules.js'; ?>
 
     // ==================== INITIALISATION ====================
     document.addEventListener('DOMContentLoaded', function() {

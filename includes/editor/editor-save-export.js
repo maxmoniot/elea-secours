@@ -736,10 +736,15 @@ function loadParsedCourse(parsedCourse) {
                         h5pType: activity.h5pType || '',
                         name: activity.name || 'Activité',
                         visible: activity.visible !== undefined ? activity.visible : true,
+                        // La consigne affichée AU-DESSUS de l'activité : elle n'était
+                        // recopiée que pour assign/resource, donc perdue pour tout le
+                        // reste (étiquettes, consignes des H5P) dès qu'on ouvrait un
+                        // .mbz depuis l'ordinateur.
+                        intro: activity.intro || '',
                         content: activity.content || {}
                     };
                     // Ne pas garder h5pType pour les types non-H5P
-                    if (['assign', 'resource', 'mapmodules', 'quiz'].includes(act.type)) {
+                    if (['assign', 'resource', 'mapmodules', 'quiz', 'label', 'page'].includes(act.type)) {
                         act.h5pType = '';
                     }
                     // Copier les champs spécifiques mapmodules

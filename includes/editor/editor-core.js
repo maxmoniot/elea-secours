@@ -124,7 +124,7 @@ function renderTree() {
         
         (section.activities || []).forEach((activity, aIdx) => {
             const actSelected = selectedActivity === activity.id;
-            const icon = getActivityIcon(['assign','resource','mapmodules'].includes(activity.type) ? activity.type : (activity.quizType || activity.h5pType || activity.type));
+            const icon = getActivityIcon(['assign','resource','mapmodules','label','page'].includes(activity.type) ? activity.type : (activity.quizType || activity.h5pType || activity.type));
             const actHidden = activity.visible === false || sectionHidden;
             const actOwnHidden = activity.visible === false;
             const actDimClass = actHidden ? ' tree-hidden' : '';
@@ -868,6 +868,8 @@ function getActivityIcon(type) {
         'ImageMultipleHotspotQuestion': '🔎',
         'quiz': '📋',
         'ddimageortext': '🎯',
+        'label': '💬',    /* étiquette : du texte posé dans le parcours */
+        'page': '📄',
         'h5pactivity': '🎮'
     };
     return icons[type] || '📄';
@@ -1045,6 +1047,9 @@ function confirmAddActivity() {
             files: [],
             intro: ''
         };
+    } else if (selectedActivityType === 'label' || selectedActivityType === 'page') {
+        activity = createTextModuleActivity(selectedActivityType);
+        activity.name = getActivityDefaultName(selectedActivityType);
     } else if (selectedActivityType === 'ddimageortext') {
         activity = {
             id: generateId(),
@@ -1110,6 +1115,8 @@ function getActivityDefaultName(type) {
         'mapmodules': 'Carte de progression',
         'assign': 'Nouveau travail à déposer',
         'resource': 'Nouveaux fichiers à distribuer',
+        'label': 'Nouvelle étiquette',
+        'page': 'Nouvelle page',
         'ddimageortext': 'Nouveau glisser-déposer image'
     };
     return names[type] || 'Nouvelle activité';
@@ -1464,6 +1471,10 @@ function renderActivityEditor() {
     }
     if (activity.type === 'resource') {
         renderResourceEditor(activity);
+        return;
+    }
+    if (activity.type === 'label' || activity.type === 'page') {
+        renderTextModuleEditor(activity);
         return;
     }
     if (activity.type === 'quiz' && activity.quizType === 'ddimageortext') {
@@ -2090,7 +2101,9 @@ function resourceDownloadFile(activityId, fileIndex) {
 function resourceUpdateIntro() {
     const editor = document.getElementById('resourceIntroEditor');
     if (!editor) return;
-    const activity = selectedActivity;
+    // selectedActivity est un IDENTIFIANT, pas l'activité : écrire dessus revenait à
+    // poser une propriété sur une chaîne → la description n'était jamais enregistrée.
+    const activity = getSelectedActivity();
     if (activity) {
         activity.intro = resourceCleanIntroForSave(editor.innerHTML);
         onCourseModified();
@@ -2100,7 +2113,7 @@ function resourceUpdateIntro() {
 function resourceInsertImage(input) {
     if (!input.files || input.files.length === 0) return;
     const file = input.files[0];
-    const activityId = selectedActivity ? selectedActivity.id : '';
+    const activityId = selectedActivity || '';
     const formData = new FormData();
     formData.append('file', file);
     formData.append('action', 'upload_assign_file');
@@ -2315,8 +2328,8 @@ function renderStructureView() {
                 <div class="structure-activities" id="structureActivities-${section.id}">`;
         
         activities.forEach((activity, aIdx) => {
-            const icon = getActivityIcon(['assign','resource','mapmodules'].includes(activity.type) ? activity.type : (activity.quizType || activity.h5pType || activity.type));
-            const typeLabel = activity.type === 'mapmodules' ? 'Carte de Progression' : (activity.type === 'assign' ? 'Travail à déposer' : (activity.type === 'resource' ? 'Fichiers à distribuer' : (activity.quizType === 'ddimageortext' ? 'Glisser Image' : (activity.h5pType === 'CoursePresentation' ? 'Parcours' : (activity.h5pType === 'ThreeImage' ? 'Visite 360' : (activity.h5pType === 'GameMap' ? 'Carte à explorer' : (activity.h5pType === 'ImageSequencing' ? 'Remettre dans l\'ordre' : (activity.h5pType === 'MemoryGame' ? 'Memory' : (activity.h5pType === 'ImageMultipleHotspotQuestion' ? 'Trouver les zones' : (activity.h5pType || activity.type))))))))));
+            const icon = getActivityIcon(['assign','resource','mapmodules','label','page'].includes(activity.type) ? activity.type : (activity.quizType || activity.h5pType || activity.type));
+            const typeLabel = activity.type === 'mapmodules' ? 'Carte de Progression' : (activity.type === 'assign' ? 'Travail à déposer' : (activity.type === 'resource' ? 'Fichiers à distribuer' : (activity.type === 'label' ? 'Étiquette' : (activity.type === 'page' ? 'Page' : (activity.quizType === 'ddimageortext' ? 'Glisser Image' : (activity.h5pType === 'CoursePresentation' ? 'Parcours' : (activity.h5pType === 'ThreeImage' ? 'Visite 360' : (activity.h5pType === 'GameMap' ? 'Carte à explorer' : (activity.h5pType === 'ImageSequencing' ? 'Remettre dans l\'ordre' : (activity.h5pType === 'MemoryGame' ? 'Memory' : (activity.h5pType === 'ImageMultipleHotspotQuestion' ? 'Trouver les zones' : (activity.h5pType || activity.type))))))))))));
             const actHidden = activity.visible === false || secHidden;
             const actOwnHidden = activity.visible === false;
             const actDimStyle = actHidden ? ' style="opacity: 0.45;"' : '';

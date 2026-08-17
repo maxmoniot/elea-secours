@@ -997,6 +997,33 @@ function exportDiagnostic($input) {
  * Parse un fichier MBZ pour import
  */
 /**
+ * Étiquette (module « label ») et Page (module « page ») : des modules de TEXTE
+ * Moodle, pas du H5P.
+ *
+ * Sans cette conversion ils passaient dans la moulinette H5P et ressortaient en
+ * « H5P.label » / « H5P.page » — des bibliothèques qui n'existent pas, donc une
+ * activité vide et cassée dans Éléa (c'était le cas de l'étiquette d'accueil
+ * « Bonjour, faites les activités ci-dessous… », présente dans tous les parcours).
+ */
+function buildTextModuleActivity(array $activity, array $fileMapping, string $id): array {
+    $type = ($activity['type'] ?? 'label') === 'page' ? 'page' : 'label';
+    $out = [
+        'id' => $id,
+        'type' => $type,
+        'name' => $activity['name'] ?? ($type === 'page' ? 'Page' : 'Étiquette'),
+        'h5pType' => '',
+        // Le texte de l'étiquette vit dans « intro » ; celui d'une page dans « content ».
+        'intro' => resolvePluginfileUrls($activity['intro'] ?? '', $fileMapping),
+        'content' => '',
+    ];
+    if ($type === 'page') {
+        $corps = $activity['content'] ?? '';
+        $out['content'] = resolvePluginfileUrls(is_string($corps) ? $corps : '', $fileMapping);
+    }
+    return $out;
+}
+
+/**
  * Vignette du cours (image de la carte du parcours dans Éléa).
  *
  * Dans le .mbz c'est un fichier du CONTEXTE DU COURS : component « course »,
@@ -1321,6 +1348,14 @@ function parseMbz() {
                     if ($quizEditorAct) {
                         $editorSection['activities'][] = $quizEditorAct;
                     }
+                    continue;
+                }
+
+                // Étiquette / Page : modules de texte, jamais du H5P
+                if ($actType === 'label' || $actType === 'page') {
+                    $editorSection['activities'][] = buildTextModuleActivity(
+                        $activity, $fileMapping,
+                        'import_' . ($activity['module_id'] ?? $activity['id'] ?? uniqid()));
                     continue;
                 }
 
@@ -5924,6 +5959,14 @@ function parseDriveMbz($input) {
                     continue;
                 }
 
+                // Étiquette / Page : modules de texte, jamais du H5P
+                if ($actType === 'label' || $actType === 'page') {
+                    $editorSection['activities'][] = buildTextModuleActivity(
+                        $activity, $fileMapping,
+                        'import_' . ($activity['module_id'] ?? $activity['id'] ?? uniqid()));
+                    continue;
+                }
+
                 $h5pType = detectH5pType($activity);
                 $h5pContent = [];
 
@@ -6269,6 +6312,14 @@ function parseLocalCourse($input) {
                     continue;
                 }
 
+                // Étiquette / Page : modules de texte, jamais du H5P
+                if ($actType === 'label' || $actType === 'page') {
+                    $editorSection['activities'][] = buildTextModuleActivity(
+                        $activity, $fileMapping,
+                        'import_' . ($activity['module_id'] ?? $activity['id'] ?? uniqid()));
+                    continue;
+                }
+
                 $h5pType = detectH5pType($activity);
                 $h5pContent = [];
 
@@ -6581,6 +6632,14 @@ function loadTemplate($input) {
                     if ($quizEditorAct) {
                         $editorSection['activities'][] = $quizEditorAct;
                     }
+                    continue;
+                }
+
+                // Étiquette / Page : modules de texte, jamais du H5P
+                if ($actType === 'label' || $actType === 'page') {
+                    $editorSection['activities'][] = buildTextModuleActivity(
+                        $activity, $fileMapping,
+                        'import_' . ($activity['module_id'] ?? $activity['id'] ?? uniqid()));
                     continue;
                 }
 
