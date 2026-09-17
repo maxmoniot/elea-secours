@@ -298,7 +298,7 @@ if ($error) {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Erreur - <?= SITE_NAME ?></title>
         <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🆘</text></svg>">
-        <link rel="stylesheet" href="assets/css/style.css">
+        <link rel="stylesheet" href="assets/css/style.css?v=<?= @filemtime(__DIR__ . "/assets/css/style.css") ?>">
         <?php include __DIR__ . '/includes/theme_assets.php'; ?>
     </head>
     <body>
@@ -318,6 +318,20 @@ if ($error) {
 
 $isDriveSource = (strpos($baseUrl, 'file_drive.php') !== false);
 $renderer = new CourseRenderer($courseData, $basePath, $baseUrl);
+
+// Base d'URL pour les fichiers TÉLÉCHARGÉS (activité « Dossier »). Elle doit être servie
+// par notre domaine : quand le cours vient de Drive, getFileUrl() renvoie des URL
+// lh3.googleusercontent.com, une autre origine — le navigateur y refuse la lecture des
+// octets (pas de « tout télécharger ») et ignore l'attribut `download` (le fichier
+// arriverait nommé d'après son empreinte). file_drive.php sert les mêmes fichiers depuis
+// chez nous. Les cours locaux, eux, sont déjà servis par notre domaine.
+if ($baseUrl !== '') {
+    $renderer->setDownloadBaseUrl($baseUrl);
+} elseif ($courseIdentifier !== '') {
+    $drivePrefix = ($courseType === 'gdrive') ? 'CoursPermanents' : 'CoursTemporaires';
+    $renderer->setDownloadBaseUrl('file_drive.php?course=' . urlencode($courseIdentifier)
+        . '&prefix=' . $drivePrefix . '&file=');
+}
 $course = $courseData['course'] ?? [];
 $sections = $courseData['sections'] ?? [];
 
@@ -378,7 +392,7 @@ foreach ($sections as $sIndex => $section) {
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="assets/css/style.css?v=<?= @filemtime(__DIR__ . "/assets/css/style.css") ?>">
     <?php include __DIR__ . '/includes/theme_assets.php'; ?>
     <!-- Librairies pour génération PDF -->
     <script src="assets/js/html2canvas.min.js"></script>
@@ -619,7 +633,11 @@ foreach ($sections as $sIndex => $section) {
         border-color: rgba(255,255,255,0.5);
     }
     
-    .course-content { flex: 1; padding: 0.5rem 0.5rem 80px; max-width: 1100px; margin: 0 auto; width: 100%; }
+    /* La réserve du bas doit rester plus haute que la barre violette fixe (~73 px) :
+       avec 80 px il ne restait que 5 px de marge, et le moindre écart (police système
+       plus grande, bouton sur deux lignes) faisait passer le bas du contenu — le bouton
+       « Question suivante » d'une évaluation — DERRIÈRE la barre. */
+    .course-content { flex: 1; padding: 0.5rem 0.5rem 110px; max-width: 1100px; margin: 0 auto; width: 100%; }
 
     /* Conteneur pour le scale responsive (pas de transition par défaut : le scale est appliqué
        instantanément à l'ouverture de chaque activité pour éviter un effet de zoom visible) */
@@ -2684,7 +2702,7 @@ foreach ($sections as $sIndex => $section) {
         .menu-toggle { display: block; }
         .course-main { margin-left: 0; }
         .nav-bar-content { padding-left: 1rem; padding-right: 1rem; }
-        .course-content { padding: 1rem; padding-bottom: 100px; }
+        .course-content { padding: 1rem; padding-bottom: 130px; }
         .btn-student-link { padding: 0.4rem 0.6rem; font-size: 0.75rem; }
         .btn-student-link span { display: none; }
         .btn-header-action { padding: 0.4rem 0.6rem; font-size: 0.75rem; }
@@ -2726,8 +2744,21 @@ foreach ($sections as $sIndex => $section) {
         var wrapper = document.querySelector('.activity-wrapper.active');
         if (!wrapper) return;
 
+        // Les évaluations ne sont PAS mises à l'échelle : leur hauteur change à chaque
+        // question, donc un fit calculé sur la question 1 est faux dès la question 2, et
+        // une longue question tombait à 47 % (illisible). Comme sur Éléa, un test
+        // s'affiche à sa taille normale et l'on fait défiler. Le zoom manuel reste
+        // possible via la barre du bas.
+        if (wrapper.querySelector('.activity-quiz')) {
+            _viewerZoomManual = false;
+            _viewerZoomLevel = 100;
+            _applyViewerZoom();
+            return;
+        }
+
         // Mesurer la taille naturelle et la position du wrapper (sans transform)
         wrapper.style.transform = '';
+        wrapper.style.marginBottom = '';
         var natRect = wrapper.getBoundingClientRect();
         var natW = natRect.width  || 1;
         var natH = natRect.height || 1;
@@ -2754,8 +2785,24 @@ foreach ($sections as $sIndex => $section) {
         var wrapper = document.querySelector('.activity-wrapper.active');
         if (!wrapper) return;
         var scale = _viewerZoomLevel / 100;
+        // `transform: scale()` ne modifie PAS la boîte de mise en page : au-delà de 100 %
+        // l'activité est peinte plus bas que sa hauteur réelle, donc le bas (le bouton
+        // « Question suivante » d'une évaluation, par exemple) se retrouve sous la barre
+        // violette fixe, dans une zone que le défilement n'atteint pas. On rend cette
+        // hauteur peinte au document avec une marge basse compensatoire.
+        // offsetHeight ignore les transforms : c'est bien la hauteur de mise en page.
+        var natH = wrapper.offsetHeight;
         wrapper.style.transform = 'scale(' + scale + ')';
         wrapper.style.transformOrigin = 'top center';
+        wrapper.style.marginBottom = '0px';
+        if (scale > 1) {
+            // getBoundingClientRect() tient compte du transform : c'est la hauteur
+            // réellement peinte. La différence avec la boîte de mise en page est
+            // exactement ce qu'il faut rendre au document (+ 8 px de garde pour la
+            // barre de défilement horizontale qui apparaît aux forts zooms).
+            var paintedH = wrapper.getBoundingClientRect().height;
+            wrapper.style.marginBottom = Math.max(0, Math.ceil(paintedH - natH) + 8) + 'px';
+        }
         var slider = document.getElementById('viewerZoomSlider');
         var label  = document.getElementById('viewerZoomLabel');
         if (slider) slider.value = _viewerZoomLevel;
@@ -2766,6 +2813,17 @@ foreach ($sections as $sIndex => $section) {
     // Re-fit seulement si l'élève n'a pas zoomé manuellement.
     function updateViewerScale() {
         if (!_viewerZoomManual) viewerZoomFit();
+    }
+
+    /**
+     * À appeler dès que la hauteur de l'activité affichée change sans changer
+     * d'activité (passage à la question suivante d'une évaluation, récapitulatif,
+     * correction…) : re-fit si l'élève n'a pas zoomé lui-même, et dans tous les cas
+     * re-calcul de la compensation de mise en page.
+     */
+    function viewerZoomRefresh() {
+        if (_viewerZoomManual) _applyViewerZoom();
+        else viewerZoomFit();
     }
 
     window.addEventListener('resize', updateViewerScale);
@@ -2818,10 +2876,10 @@ foreach ($sections as $sIndex => $section) {
                         results.style.display = 'block';
                     }
                     
-                    // Désactiver les inputs
-                    var inputs = container.querySelectorAll('input, select');
-                    for (var j = 0; j < inputs.length; j++) {
-                        inputs[j].disabled = true;
+                    // Verrouiller toutes les réponses (champs, listes, zones de texte,
+                    // flèches d'ordonnancement et étiquettes du glisser-déposer).
+                    for (var j = 0; j < questions.length; j++) {
+                        quizLockQuestion(questions[j]);
                     }
                 }
             }
@@ -2895,8 +2953,9 @@ foreach ($sections as $sIndex => $section) {
         var wrappers = document.querySelectorAll('.activity-wrapper');
         for (var i = 0; i < wrappers.length; i++) {
             wrappers[i].classList.remove('active');
-            // Reset le scale
+            // Reset le scale (et la marge qui compense un scale > 100 %)
             wrappers[i].style.transform = '';
+            wrappers[i].style.marginBottom = '';
             wrappers[i].style.width = '';
             wrappers[i].style.marginLeft = '';
         }
@@ -3530,51 +3589,369 @@ foreach ($sections as $sIndex => $section) {
         var container = document.getElementById(quizId);
         var state = window.quizState[quizId];
         var totalQuestions = parseInt(container.dataset.totalQuestions);
-        
+
         if (state.currentQuestion < totalQuestions - 1) {
             showQuizQuestion(quizId, state.currentQuestion + 1);
         }
     }
-    
+
     function quizPrevQuestion(quizId) {
         var state = window.quizState[quizId];
-        
+
         if (state.currentQuestion > 0) {
             showQuizQuestion(quizId, state.currentQuestion - 1);
         }
     }
-    
+
     function showQuizQuestion(quizId, index) {
         var container = document.getElementById(quizId);
         var questions = container.querySelectorAll('.quiz-question');
         var state = window.quizState[quizId];
         var totalQuestions = parseInt(container.dataset.totalQuestions);
-        
+
         // Cacher toutes les questions
         for (var i = 0; i < questions.length; i++) {
             questions[i].style.display = 'none';
             questions[i].classList.remove('active');
         }
-        
+
         // Afficher la question courante
         questions[index].style.display = 'block';
         questions[index].classList.add('active');
         state.currentQuestion = index;
-        
+
         // Mettre à jour la barre de progression
         var progressText = container.querySelector('.quiz-current-q');
         var progressFill = container.querySelector('.quiz-progress-fill');
         if (progressText) progressText.textContent = index + 1;
         if (progressFill) progressFill.style.width = ((index + 1) / totalQuestions * 100) + '%';
-        
+
         // Mettre à jour les boutons
         var prevBtn = container.querySelector('.quiz-prev-btn');
         var nextBtn = container.querySelector('.quiz-next-btn');
         var submitBtn = container.querySelector('.quiz-submit-btn');
-        
+
         if (prevBtn) prevBtn.style.display = index > 0 ? 'inline-block' : 'none';
         if (nextBtn) nextBtn.style.display = index < totalQuestions - 1 ? 'inline-block' : 'none';
         if (submitBtn) submitBtn.style.display = index === totalQuestions - 1 ? 'inline-block' : 'none';
+
+        // Les zones de dépôt sont positionnées d'après la taille affichée de l'image de
+        // fond : tant que la question était masquée, cette taille valait 0.
+        quizSyncAllDdi(questions[index]);
+
+        // La hauteur de l'activité vient de changer : re-calculer le zoom/la compensation
+        // de mise en page, sinon le bas de la question (et son bouton « Question
+        // suivante ») peut se retrouver sous la barre violette fixe.
+        if (typeof viewerZoomRefresh === 'function') viewerZoomRefresh();
+
+        // Comme sur Éléa, chaque question repart du haut : sans ça l'élève reste au
+        // niveau de défilement de la question précédente et croit le bouton disparu.
+        quizScrollToTop(container);
+    }
+
+    function quizScrollToTop(container) {
+        var top = container.getBoundingClientRect().top + window.scrollY - 12;
+        window.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
+    }
+
+    // ===== Moteur de correction =====
+    // Un seul endroit décrit, pour chaque type de question, comment lire la réponse de
+    // l'élève, la comparer à la bonne et la résumer. Avant, seuls les QCM et les
+    // Vrai/Faux étaient corrigés : tous les autres types comptaient dans le total mais
+    // rapportaient toujours 0 (une évaluation « Sélection de mots » sortait à 0/2).
+
+    function quizNormText(s, useCase) {
+        s = (s === null || s === undefined) ? '' : String(s);
+        s = s.replace(/\s+/g, ' ').trim();
+        return useCase ? s : s.toLowerCase();
+    }
+
+    // Moodle autorise le joker « * » dans les réponses courtes.
+    function quizShortAnswerMatches(given, expected, useCase) {
+        var g = quizNormText(given, useCase);
+        var e = quizNormText(expected, useCase);
+        if (e.indexOf('*') === -1) return g === e;
+        var rx = '^' + e.split('*').map(function (part) {
+            return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }).join('.*') + '$';
+        try { return new RegExp(rx).test(g); } catch (err) { return g === e; }
+    }
+
+    function quizParseNumber(v) {
+        if (v === null || v === undefined) return NaN;
+        var s = String(v).replace(/\s/g, '').replace(',', '.');
+        if (s === '') return NaN;
+        return parseFloat(s);
+    }
+
+    // Marque un élément (champ, liste, étiquette) juste ou faux.
+    function quizMark(el, ok) {
+        if (!el) return;
+        el.classList.remove('quiz-ok', 'quiz-ko');
+        el.classList.add(ok ? 'quiz-ok' : 'quiz-ko');
+    }
+
+    /**
+     * Corrige une question et renvoie { fraction: 0..1, answered: bool }.
+     * `apply` : si vrai, colore aussi les éléments de la question.
+     */
+    function quizGradeQuestion(qEl, qData, apply) {
+        var qtype = qEl.dataset.qtype;
+        var i, j, ok, total = 0, good = 0, answered = false;
+
+        if (qtype === 'multichoice' || qtype === 'truefalse') {
+            var inputs = qEl.querySelectorAll('.answer-option input');
+            var score = 0;
+            for (i = 0; i < inputs.length; i++) {
+                var input = inputs[i];
+                var fraction = parseFloat(input.dataset.fraction) || 0;
+                if (input.checked) {
+                    answered = true;
+                    score += fraction;
+                    if (apply) input.closest('.answer-option').classList.add(fraction > 0 ? 'correct-answer' : 'wrong-answer');
+                }
+            }
+            return { fraction: Math.max(0, Math.min(1, score)), answered: answered };
+        }
+
+        if (qtype === 'shortanswer') {
+            var sInput = qEl.querySelector('.answer-input');
+            var useCase = !!(qData && qData.use_case);
+            var best = 0;
+            var given = sInput ? sInput.value : '';
+            answered = quizNormText(given, false) !== '';
+            var answers = (qData && qData.answers) || [];
+            for (i = 0; i < answers.length; i++) {
+                if (quizShortAnswerMatches(given, answers[i].text, useCase)) {
+                    best = Math.max(best, parseFloat(answers[i].fraction) || 0);
+                }
+            }
+            if (apply) quizMark(sInput, best >= 1);
+            return { fraction: Math.max(0, Math.min(1, best)), answered: answered };
+        }
+
+        if (qtype === 'numerical') {
+            var nInput = qEl.querySelector('.answer-input');
+            var value = quizParseNumber(nInput ? nInput.value : '');
+            answered = !isNaN(value);
+            var nBest = 0;
+            var nAnswers = (qData && qData.answers) || [];
+            var tolerances = (qData && qData.tolerances) || {};
+            for (i = 0; i < nAnswers.length; i++) {
+                var expected = quizParseNumber(nAnswers[i].text);
+                if (isNaN(expected) || isNaN(value)) continue;
+                var tol = parseFloat(tolerances[nAnswers[i].id]);
+                if (isNaN(tol)) tol = 0;
+                if (Math.abs(value - expected) <= tol + 1e-9) {
+                    nBest = Math.max(nBest, parseFloat(nAnswers[i].fraction) || 0);
+                }
+            }
+            if (apply) quizMark(nInput, nBest >= 1);
+            return { fraction: Math.max(0, Math.min(1, nBest)), answered: answered };
+        }
+
+        if (qtype === 'match') {
+            var mSelects = qEl.querySelectorAll('.match-input');
+            for (i = 0; i < mSelects.length; i++) {
+                total++;
+                if (mSelects[i].value) answered = true;
+                ok = mSelects[i].value !== '' && mSelects[i].value === mSelects[i].dataset.correct;
+                if (ok) good++;
+                if (apply) quizMark(mSelects[i], ok);
+            }
+            return { fraction: total ? good / total : 0, answered: answered };
+        }
+
+        if (qtype === 'gapselect' || qtype === 'ddwtos' || qtype === 'multianswer') {
+            var gaps = qEl.querySelectorAll('.gapselect-input, .cloze-input');
+            for (i = 0; i < gaps.length; i++) {
+                total++;
+                var val = gaps[i].value;
+                if (quizNormText(val, false) !== '') answered = true;
+                // Les listes comparent au texte exact, les champs libres tolèrent la casse.
+                ok = gaps[i].tagName === 'SELECT'
+                    ? (val !== '' && val === gaps[i].dataset.correct)
+                    : quizShortAnswerMatches(val, gaps[i].dataset.correct, false);
+                if (ok) good++;
+                if (apply) quizMark(gaps[i], ok);
+            }
+            return { fraction: total ? good / total : 0, answered: answered };
+        }
+
+        if (qtype === 'ordering') {
+            var items = qEl.querySelectorAll('.ordering-item');
+            for (i = 0; i < items.length; i++) {
+                total++;
+                ok = parseInt(items[i].dataset.correctIndex, 10) === i;
+                if (ok) good++;
+                if (apply) quizMark(items[i], ok);
+            }
+            // Un ordre non touché reste une réponse : on considère la question traitée.
+            return { fraction: total ? good / total : 0, answered: true };
+        }
+
+        if (qtype === 'ddimageortext') {
+            var drops = qEl.querySelectorAll('.ddi-drop');
+            for (i = 0; i < drops.length; i++) {
+                total++;
+                var placed = drops[i].querySelector('.ddi-drag');
+                if (placed) answered = true;
+                ok = !!placed && parseInt(placed.dataset.no, 10) === parseInt(drops[i].dataset.choice, 10);
+                if (ok) good++;
+                if (apply) quizMark(drops[i], ok);
+            }
+            return { fraction: total ? good / total : 0, answered: answered };
+        }
+
+        // Rédaction, description, types non gérés : pas de correction automatique.
+        return { fraction: 0, answered: false };
+    }
+
+    /** Résumé lisible de la réponse de l'élève, pour le récapitulatif. */
+    function quizDescribeAnswer(qEl) {
+        var qtype = qEl.dataset.qtype;
+        var parts = [];
+        var i, els;
+
+        if (qtype === 'multichoice' || qtype === 'truefalse') {
+            els = qEl.querySelectorAll('.answer-option input');
+            for (i = 0; i < els.length; i++) {
+                if (els[i].checked) parts.push(els[i].closest('.answer-option').querySelector('.answer-text').textContent.trim());
+            }
+        } else if (qtype === 'shortanswer' || qtype === 'numerical') {
+            var inp = qEl.querySelector('.answer-input');
+            if (inp && inp.value.trim()) parts.push(inp.value.trim());
+        } else if (qtype === 'match') {
+            els = qEl.querySelectorAll('.match-input');
+            for (i = 0; i < els.length; i++) {
+                if (els[i].value) {
+                    var left = els[i].closest('tr').querySelector('td:first-child').textContent.trim();
+                    parts.push(left + ' → ' + els[i].value);
+                }
+            }
+        } else if (qtype === 'gapselect' || qtype === 'ddwtos' || qtype === 'multianswer') {
+            els = qEl.querySelectorAll('.gapselect-input, .cloze-input');
+            for (i = 0; i < els.length; i++) {
+                if (els[i].value) parts.push('Trou ' + (i + 1) + ' : ' + els[i].value);
+            }
+        } else if (qtype === 'ordering') {
+            els = qEl.querySelectorAll('.ordering-item .ordering-text');
+            for (i = 0; i < els.length; i++) parts.push((i + 1) + '. ' + els[i].textContent.trim());
+        } else if (qtype === 'ddimageortext') {
+            els = qEl.querySelectorAll('.ddi-drop');
+            for (i = 0; i < els.length; i++) {
+                var placed = els[i].querySelector('.ddi-drag');
+                if (placed) {
+                    var label = placed.querySelector('img') ? (placed.querySelector('img').alt || 'image') : placed.textContent.trim();
+                    var zone = (els[i].querySelector('.ddi-drop-label') || {}).textContent || ('zone ' + (i + 1));
+                    parts.push((zone.trim() || ('zone ' + (i + 1))) + ' : ' + label);
+                }
+            }
+        } else if (qtype === 'essay') {
+            var ta = qEl.querySelector('.essay-input');
+            if (ta && ta.value.trim()) parts.push(ta.value.trim());
+        }
+        return parts;
+    }
+
+    // ===== Ordonnancement =====
+    function quizMoveOrderingItem(btn, dir) {
+        var li = btn.closest('.ordering-item');
+        var list = li.parentNode;
+        if (dir < 0 && li.previousElementSibling) {
+            list.insertBefore(li, li.previousElementSibling);
+        } else if (dir > 0 && li.nextElementSibling) {
+            list.insertBefore(li.nextElementSibling, li);
+        }
+    }
+
+    // ===== Glisser-déposer sur image (ddimageortext) =====
+    var _quizDdiSelected = null;
+
+    // Les coordonnées des zones sont en pixels de l'image d'origine : on les reporte
+    // à l'échelle réellement affichée (l'image est responsive).
+    function quizDdiSync(img) {
+        var stage = img.closest('.ddi-stage');
+        if (!stage || !img.naturalWidth) return;
+        var scale = img.clientWidth / img.naturalWidth;
+        if (!scale || !isFinite(scale)) return;
+        var drops = stage.querySelectorAll('.ddi-drop');
+        for (var i = 0; i < drops.length; i++) {
+            drops[i].style.left = (parseInt(drops[i].dataset.x, 10) * scale) + 'px';
+            drops[i].style.top = (parseInt(drops[i].dataset.y, 10) * scale) + 'px';
+        }
+        // Les étiquettes-images sont des découpes de l'image de fond : à la même
+        // échelle qu'elle, sinon elles ne recouvrent pas leur zone.
+        var root = img.closest('.answers-ddimageortext');
+        var dragImgs = root ? root.querySelectorAll('.ddi-drag img') : [];
+        for (var j = 0; j < dragImgs.length; j++) {
+            if (dragImgs[j].naturalWidth) {
+                dragImgs[j].style.width = (dragImgs[j].naturalWidth * scale) + 'px';
+            }
+        }
+    }
+
+    function quizSyncAllDdi(root) {
+        var imgs = (root || document).querySelectorAll('.ddi-bg');
+        for (var i = 0; i < imgs.length; i++) {
+            if (imgs[i].complete) quizDdiSync(imgs[i]);
+        }
+    }
+    window.addEventListener('resize', function () { quizSyncAllDdi(document); });
+
+    function quizDdiDragStart(ev, el) {
+        _quizDdiSelected = el;
+        try { ev.dataTransfer.setData('text/plain', 'ddi'); ev.dataTransfer.effectAllowed = 'move'; } catch (e) {}
+    }
+
+    function quizDdiSelect(ev, el) {
+        ev.stopPropagation();
+        // Un clic sur une étiquette déjà posée la renvoie à la réserve.
+        if (el.parentNode && el.parentNode.classList.contains('ddi-drop')) {
+            quizDdiSendToBank(el);
+            return;
+        }
+        if (_quizDdiSelected) _quizDdiSelected.classList.remove('ddi-selected');
+        _quizDdiSelected = (_quizDdiSelected === el) ? null : el;
+        if (_quizDdiSelected) _quizDdiSelected.classList.add('ddi-selected');
+    }
+
+    function quizDdiPlaceInto(drop, drag) {
+        if (!drop || !drag) return;
+        // Renvoyer l'étiquette déjà présente dans la zone
+        var existing = drop.querySelector('.ddi-drag');
+        if (existing) quizDdiSendToBank(existing);
+        var node = drag.dataset.infinite === '1' ? drag.cloneNode(true) : drag;
+        node.classList.remove('ddi-selected');
+        drop.appendChild(node);
+        _quizDdiSelected = null;
+    }
+
+    function quizDdiSendToBank(drag) {
+        var root = drag.closest('.answers-ddimageortext');
+        var bank = root ? root.querySelector('.ddi-bank') : null;
+        if (!bank) return;
+        if (drag.dataset.infinite === '1' && drag.parentNode && drag.parentNode.classList.contains('ddi-drop')) {
+            drag.parentNode.removeChild(drag);   // c'était un clone
+            return;
+        }
+        drag.classList.remove('ddi-selected', 'quiz-ok', 'quiz-ko');
+        bank.appendChild(drag);
+    }
+
+    function quizDdiDrop(ev, drop) {
+        ev.preventDefault();
+        quizDdiPlaceInto(drop, _quizDdiSelected);
+    }
+
+    function quizDdiPlace(drop) {
+        if (_quizDdiSelected) quizDdiPlaceInto(drop, _quizDdiSelected);
+    }
+
+    function quizDdiDropBack(ev, bank) {
+        ev.preventDefault();
+        if (_quizDdiSelected) quizDdiSendToBank(_quizDdiSelected);
+        _quizDdiSelected = null;
     }
 
     // Quiz Moodle - Récapitulatif avant validation
@@ -3584,45 +3961,26 @@ foreach ($sections as $sIndex => $section) {
         var quizData = window.quizData ? window.quizData[quizId] : [];
         var recapDiv = container.querySelector('.quiz-recap');
         var recapQuestions = container.querySelector('.quiz-recap-questions');
-        
+
         // Construire le récapitulatif
         var html = '';
         for (var i = 0; i < questions.length; i++) {
             var qEl = questions[i];
             var qData = quizData[i];
             if (!qData) continue;
-            
-            var qtype = qEl.dataset.qtype;
-            var questionText = qEl.querySelector('.question-text').innerHTML;
-            var selectedAnswers = [];
-            
-            if (qtype === 'multichoice' || qtype === 'truefalse') {
-                var inputs = qEl.querySelectorAll('.answer-option input');
-                for (var j = 0; j < inputs.length; j++) {
-                    if (inputs[j].checked) {
-                        var answerText = inputs[j].closest('.answer-option').querySelector('.answer-text').textContent;
-                        selectedAnswers.push(answerText);
-                    }
-                }
-            } else if (qtype === 'shortanswer') {
-                var input = qEl.querySelector('.answer-input');
-                if (input && input.value) {
-                    selectedAnswers.push(input.value);
-                }
-            } else if (qtype === 'match') {
-                var selects = qEl.querySelectorAll('select');
-                for (var j = 0; j < selects.length; j++) {
-                    if (selects[j].value) {
-                        var leftText = selects[j].closest('tr').querySelector('td:first-child').textContent;
-                        selectedAnswers.push(leftText + ' → ' + selects[j].value);
-                    }
-                }
+
+            var questionText = quizRecapTitle(qEl);
+            var selectedAnswers = quizDescribeAnswer(qEl);
+
+            var answerDisplay;
+            if (selectedAnswers.length > 0) {
+                answerDisplay = selectedAnswers.map(function (t) { return quizEscapeHtml(t); }).join('<br>');
+            } else if (qEl.dataset.qtype === 'description') {
+                answerDisplay = '<em style="color:#999;">Information : aucune réponse attendue</em>';
+            } else {
+                answerDisplay = '<em style="color:#999;">Pas de réponse</em>';
             }
-            
-            var answerDisplay = selectedAnswers.length > 0 
-                ? selectedAnswers.join('<br>') 
-                : '<em style="color:#999;">Pas de réponse</em>';
-            
+
             html += '<div class="quiz-recap-item" data-qindex="' + i + '">' +
                 '<div class="quiz-recap-question">' +
                 '<span class="quiz-recap-num">' + (i + 1) + '</span>' +
@@ -3634,47 +3992,80 @@ foreach ($sections as $sIndex => $section) {
                 '<button class="btn btn-sm btn-secondary quiz-recap-edit" onclick="editQuizQuestion(\'' + quizId + '\', ' + i + ')">✏️ Modifier</button>' +
                 '</div>';
         }
-        
+
         recapQuestions.innerHTML = html;
-        
+        // Les listes/champs recopiés dans le récapitulatif ne doivent pas être utilisables.
+        var clones = recapQuestions.querySelectorAll('select, input, textarea, button.ordering-btn');
+        for (var c = 0; c < clones.length; c++) clones[c].disabled = true;
+
         // Cacher les questions et la navigation, afficher le récap
         container.querySelector('.quiz-questions').style.display = 'none';
         container.querySelector('.quiz-navigation').style.display = 'none';
         container.querySelector('.quiz-progress').style.display = 'none';
         recapDiv.style.display = 'block';
+        if (typeof viewerZoomRefresh === 'function') viewerZoomRefresh();
+        quizScrollToTop(container);
     }
-    
+
+    /**
+     * Énoncé affiché dans le récapitulatif. Pour les questions à trous, l'énoncé
+     * contient les listes déroulantes : on les remplace par la valeur choisie
+     * (sérialiser le HTML tel quel donnerait des listes vides et cliquables).
+     */
+    function quizRecapTitle(qEl) {
+        var src = qEl.querySelector('.question-text')
+               || qEl.querySelector('.answers-gapselect')
+               || qEl.querySelector('.answers-cloze');
+        if (!src) return '';
+        var clone = src.cloneNode(true);
+        var live = src.querySelectorAll('select, input, textarea');
+        var fields = clone.querySelectorAll('select, input, textarea');
+        for (var i = 0; i < fields.length; i++) {
+            var span = document.createElement('span');
+            span.className = 'quiz-recap-gap';
+            span.textContent = (live[i] && live[i].value) ? live[i].value : '…';
+            fields[i].parentNode.replaceChild(span, fields[i]);
+        }
+        return clone.innerHTML;
+    }
+
+    function quizEscapeHtml(s) {
+        return String(s).replace(/[&<>"]/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+        });
+    }
+
     function editQuizQuestion(quizId, questionIndex) {
         backToQuizQuestions(quizId);
         showQuizQuestion(quizId, questionIndex);
     }
-    
+
     function backToQuizQuestions(quizId) {
         var container = document.getElementById(quizId);
         var state = window.quizState[quizId];
         var totalQuestions = parseInt(container.dataset.totalQuestions);
-        
+
         // Cacher le récap
         container.querySelector('.quiz-recap').style.display = 'none';
-        
+
         // Réafficher les questions et la navigation
         container.querySelector('.quiz-questions').style.display = 'block';
         container.querySelector('.quiz-navigation').style.display = 'flex';
         container.querySelector('.quiz-progress').style.display = 'block';
-        
+
         // Afficher la dernière question
         showQuizQuestion(quizId, totalQuestions - 1);
     }
-    
+
     function finalSubmitQuiz(quizId) {
         // Confirmation
         if (!confirm('Êtes-vous sûr de vouloir valider définitivement ce test ? Vous ne pourrez plus modifier vos réponses.')) {
             return;
         }
-        
+
         // Appeler la fonction de correction
         submitQuiz(quizId);
-        
+
         // Cacher le récap
         var container = document.getElementById(quizId);
         container.querySelector('.quiz-recap').style.display = 'none';
@@ -3686,69 +4077,76 @@ foreach ($sections as $sIndex => $section) {
         var questions = container.querySelectorAll('.quiz-question');
         var quizData = window.quizData ? window.quizData[quizId] : [];
         var state = window.quizState[quizId];
-        var totalScore = 0, maxScore = 0;
-        
+        var totalScore = 0, maxScore = 0, manualCount = 0;
+
         // Réafficher le conteneur de questions (peut être caché par le récap)
         container.querySelector('.quiz-questions').style.display = 'block';
-        
+
         // Afficher toutes les questions pour la correction
         for (var i = 0; i < questions.length; i++) {
             questions[i].style.display = 'block';
         }
-        
+
         for (var i = 0; i < questions.length; i++) {
             var qEl = questions[i];
             var qData = quizData[i];
             if (!qData) continue;
             var maxMark = parseFloat(qData.maxmark) || 1;
-            maxScore += maxMark;
-            var score = 0;
-            var qtype = qEl.dataset.qtype;
-            
-            if (qtype === 'multichoice' || qtype === 'truefalse') {
-                var inputs = qEl.querySelectorAll('.answer-option input');
-                for (var j = 0; j < inputs.length; j++) {
-                    var input = inputs[j];
-                    var option = input.closest('.answer-option');
-                    var fraction = parseFloat(input.dataset.fraction);
-                    if (input.checked) {
-                        score += fraction;
-                        option.classList.add(fraction > 0 ? 'correct-answer' : 'wrong-answer');
-                    }
-                    // Ne pas montrer les réponses manquées
-                }
+
+            // Les questions que le lecteur ne sait pas corriger (rédaction, description,
+            // type non géré) sont hors barème : sinon l'élève perd des points sur une
+            // question à laquelle il a pourtant répondu.
+            if (qEl.dataset.autoscore !== '1') {
+                if (qEl.dataset.qtype === 'essay' || qEl.dataset.qtype === 'multianswer') manualCount++;
+                qEl.classList.remove('correct', 'incorrect', 'partial');
+                continue;
             }
-            
-            totalScore += Math.max(0, Math.min(1, score)) * maxMark;
+
+            maxScore += maxMark;
+            var result = quizGradeQuestion(qEl, qData, true);
+            totalScore += result.fraction * maxMark;
+
             qEl.classList.remove('correct', 'incorrect', 'partial');
-            if (score >= 1) qEl.classList.add('correct');
-            else if (score > 0) qEl.classList.add('partial');
+            if (result.fraction >= 1) qEl.classList.add('correct');
+            else if (result.fraction > 0) qEl.classList.add('partial');
             else qEl.classList.add('incorrect');
+
+            // Verrouiller les réponses après validation
+            quizLockQuestion(qEl);
         }
-        
+
         var pct = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
         var emoji = pct === 100 ? '🎉' : (pct >= 60 ? '👍' : (pct >= 40 ? '💪' : '📚'));
         var results = container.querySelector('.quiz-results');
         if (results) {
-            results.querySelector('.quiz-score').innerHTML = emoji + ' Score : <strong>' + totalScore.toFixed(1) + ' / ' + maxScore.toFixed(1) + '</strong> (' + pct + '%)';
+            var scoreHtml = maxScore > 0
+                ? emoji + ' Score : <strong>' + totalScore.toFixed(1) + ' / ' + maxScore.toFixed(1) + '</strong> (' + pct + '%)'
+                : '✅ Réponses enregistrées.';
+            if (manualCount > 0) {
+                scoreHtml += '<br><span style="font-size:0.85rem;font-weight:normal;">' + manualCount +
+                    ' question(s) à correction manuelle ne sont pas comptées dans ce score.</span>';
+            }
+            results.querySelector('.quiz-score').innerHTML = scoreHtml;
             results.style.display = 'block';
         }
-        
+
         // Cacher la navigation et le récap, afficher les actions
         container.querySelector('.quiz-navigation').style.display = 'none';
         container.querySelector('.quiz-progress').style.display = 'none';
         var recapEl = container.querySelector('.quiz-recap');
         if (recapEl) recapEl.style.display = 'none';
-        
+
         // Afficher le bouton recommencer seulement si pas en mode élève
         var actionsDiv = container.querySelector('.quiz-actions');
         if (actionsDiv && !isStudentMode) {
             actionsDiv.style.display = 'block';
         }
-        
+
         // Marquer le quiz comme complété
         state.completed = true;
-        
+        if (typeof viewerZoomRefresh === 'function') viewerZoomRefresh();
+        quizScrollToTop(container);
+
         // En mode élève, sauvegarder dans localStorage pour empêcher de recommencer après rechargement
         if (isStudentMode) {
             try {
@@ -3759,10 +4157,23 @@ foreach ($sections as $sIndex => $section) {
         }
     }
 
+    /** Après validation, la réponse ne doit plus pouvoir changer. */
+    function quizLockQuestion(qEl) {
+        var fields = qEl.querySelectorAll('input, select, textarea, .ordering-btn');
+        for (var i = 0; i < fields.length; i++) fields[i].disabled = true;
+        var drags = qEl.querySelectorAll('.ddi-drag');
+        for (var j = 0; j < drags.length; j++) {
+            drags[j].setAttribute('draggable', 'false');
+            drags[j].onclick = null;
+        }
+        var drops = qEl.querySelectorAll('.ddi-drop');
+        for (var k = 0; k < drops.length; k++) drops[k].onclick = null;
+    }
+
     function resetQuiz(quizId) {
         var container = document.getElementById(quizId);
         var state = window.quizState[quizId];
-        
+
         // Si en mode élève, vérifier aussi localStorage
         if (isStudentMode) {
             try {
@@ -3773,42 +4184,237 @@ foreach ($sections as $sIndex => $section) {
                 }
             } catch(e) { /* localStorage non disponible */ }
         }
-        
+
         // Si en mode élève et quiz complété, ne pas permettre de recommencer
         if (isStudentMode && state && state.completed) {
             alert('Vous ne pouvez pas recommencer ce test.');
             return;
         }
-        
+
         var inputs = container.querySelectorAll('input');
-        for (var i = 0; i < inputs.length; i++) { inputs[i].checked = false; inputs[i].value = ''; }
+        for (var i = 0; i < inputs.length; i++) { inputs[i].checked = false; inputs[i].value = ''; inputs[i].disabled = false; }
         var selects = container.querySelectorAll('select');
-        for (var i = 0; i < selects.length; i++) { selects[i].selectedIndex = 0; }
+        for (var i = 0; i < selects.length; i++) { selects[i].selectedIndex = 0; selects[i].disabled = false; }
+        var areas = container.querySelectorAll('textarea');
+        for (var i = 0; i < areas.length; i++) { areas[i].value = ''; areas[i].disabled = false; }
+        var obtns = container.querySelectorAll('.ordering-btn');
+        for (var i = 0; i < obtns.length; i++) obtns[i].disabled = false;
         var opts = container.querySelectorAll('.answer-option');
         for (var i = 0; i < opts.length; i++) opts[i].classList.remove('correct-answer', 'wrong-answer');
+        var marked = container.querySelectorAll('.quiz-ok, .quiz-ko');
+        for (var i = 0; i < marked.length; i++) marked[i].classList.remove('quiz-ok', 'quiz-ko');
+        // Renvoyer toutes les étiquettes du glisser-déposer dans leur réserve
+        var zones = container.querySelectorAll('.ddi-drop');
+        for (var i = 0; i < zones.length; i++) {
+            zones[i].onclick = function () { quizDdiPlace(this); };
+        }
+        var placed = container.querySelectorAll('.ddi-drop .ddi-drag');
+        for (var i = placed.length - 1; i >= 0; i--) {
+            placed[i].setAttribute('draggable', 'true');
+            placed[i].onclick = function (ev) { quizDdiSelect(ev, this); };
+            quizDdiSendToBank(placed[i]);
+        }
         var qs = container.querySelectorAll('.quiz-question');
         for (var i = 0; i < qs.length; i++) qs[i].classList.remove('correct', 'incorrect', 'partial');
         var results = container.querySelector('.quiz-results');
         if (results) results.style.display = 'none';
-        
+
         // Cacher le récap s'il est affiché
         var recap = container.querySelector('.quiz-recap');
         if (recap) recap.style.display = 'none';
-        
+
         // Réinitialiser l'état et afficher la première question
         if (state) {
             state.currentQuestion = 0;
             state.completed = false;
         }
-        
+
         // Réafficher les questions
         container.querySelector('.quiz-questions').style.display = 'block';
         showQuizQuestion(quizId, 0);
-        
+
         // Réafficher la navigation
         container.querySelector('.quiz-navigation').style.display = 'flex';
         container.querySelector('.quiz-progress').style.display = 'block';
         container.querySelector('.quiz-actions').style.display = 'none';
+    }
+
+    // ===== Activité « Dossier » =====
+    // « Tout télécharger » fabrique le ZIP DANS le navigateur, en méthode « stocké »
+    // (sans compression : les fichiers d'un dossier sont déjà des PDF, images ou vidéos
+    // compressés). Aucune bibliothèque externe, aucun aller-retour serveur de plus.
+    // Les URL viennent de CourseRenderer::setDownloadBaseUrl() : elles sont servies par
+    // notre domaine, donc lisibles par fetch() — une URL Google Drive ne le serait pas.
+
+    var FOLDER_ZIP_MAX_BYTES = 200 * 1024 * 1024;   // au-delà : fichier par fichier
+
+    var _folderCrcTable = null;
+    function folderCrcTable() {
+        if (_folderCrcTable) return _folderCrcTable;
+        var t = new Uint32Array(256);
+        for (var n = 0; n < 256; n++) {
+            var c = n;
+            for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+            t[n] = c >>> 0;
+        }
+        _folderCrcTable = t;
+        return t;
+    }
+
+    function folderCrc32(bytes) {
+        var t = folderCrcTable(), c = 0xFFFFFFFF;
+        for (var i = 0; i < bytes.length; i++) c = t[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+        return (c ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    /** Date/heure MS-DOS pour l'en-tête ZIP. */
+    function folderDosDateTime(d) {
+        var time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+        var date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+        return { time: time & 0xFFFF, date: date & 0xFFFF };
+    }
+
+    /** entries: [{name, bytes}] → Blob ZIP (une seule passe, pas de ZIP64). */
+    function folderBuildZip(entries) {
+        var enc = new TextEncoder();
+        var dt = folderDosDateTime(new Date());
+        var parts = [], central = [], offset = 0;
+
+        entries.forEach(function (e) {
+            var nameBytes = enc.encode(e.name);
+            var crc = folderCrc32(e.bytes);
+            var size = e.bytes.length;
+
+            var local = new DataView(new ArrayBuffer(30));
+            local.setUint32(0, 0x04034b50, true);
+            local.setUint16(4, 20, true);
+            local.setUint16(6, 0x0800, true);   // nom de fichier en UTF-8
+            local.setUint16(8, 0, true);        // méthode 0 = stocké
+            local.setUint16(10, dt.time, true);
+            local.setUint16(12, dt.date, true);
+            local.setUint32(14, crc, true);
+            local.setUint32(18, size, true);
+            local.setUint32(22, size, true);
+            local.setUint16(26, nameBytes.length, true);
+            local.setUint16(28, 0, true);
+            parts.push(new Uint8Array(local.buffer), nameBytes, e.bytes);
+
+            var cd = new DataView(new ArrayBuffer(46));
+            cd.setUint32(0, 0x02014b50, true);
+            cd.setUint16(4, 20, true);
+            cd.setUint16(6, 20, true);
+            cd.setUint16(8, 0x0800, true);
+            cd.setUint16(10, 0, true);
+            cd.setUint16(12, dt.time, true);
+            cd.setUint16(14, dt.date, true);
+            cd.setUint32(16, crc, true);
+            cd.setUint32(20, size, true);
+            cd.setUint32(24, size, true);
+            cd.setUint16(28, nameBytes.length, true);
+            cd.setUint16(30, 0, true);
+            cd.setUint16(32, 0, true);
+            cd.setUint16(34, 0, true);
+            cd.setUint16(36, 0, true);
+            cd.setUint32(38, 0, true);
+            cd.setUint32(42, offset, true);
+            central.push(new Uint8Array(cd.buffer), nameBytes);
+
+            offset += 30 + nameBytes.length + size;
+        });
+
+        var centralSize = central.reduce(function (n, p) { return n + p.length; }, 0);
+        var end = new DataView(new ArrayBuffer(22));
+        end.setUint32(0, 0x06054b50, true);
+        end.setUint16(4, 0, true);
+        end.setUint16(6, 0, true);
+        end.setUint16(8, entries.length, true);
+        end.setUint16(10, entries.length, true);
+        end.setUint32(12, centralSize, true);
+        end.setUint32(16, offset, true);
+        end.setUint16(20, 0, true);
+
+        return new Blob(parts.concat(central, [new Uint8Array(end.buffer)]), { type: 'application/zip' });
+    }
+
+    function folderSaveBlob(blob, filename) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+    }
+
+    /** Repli : on déclenche les téléchargements un par un, espacés. */
+    function folderDownloadOneByOne(files, status) {
+        files.forEach(function (f, i) {
+            setTimeout(function () {
+                var a = document.createElement('a');
+                a.href = f.url;
+                a.download = f.name;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                if (status) status.textContent = 'Téléchargement ' + (i + 1) + ' / ' + files.length;
+            }, i * 600);
+        });
+    }
+
+    async function folderDownloadAll(folderId, btn) {
+        var data = (window.folderData || {})[folderId];
+        if (!data || !data.files || !data.files.length) return;
+        var container = document.getElementById(folderId);
+        var status = container ? container.querySelector('.folder-download-status') : null;
+        var totalKnown = data.files.reduce(function (n, f) { return n + (f.size || 0); }, 0);
+        var lisible = data.files.every(function (f) { return f.sameOrigin; });
+
+        // Fichiers servis par Google Drive (autre origine) : le navigateur refuse d'en
+        // lire les octets, donc pas d'archive. Et dossier trop gros : on ne charge pas
+        // tout en mémoire. Dans les deux cas on enchaîne les téléchargements.
+        if (!lisible || totalKnown > FOLDER_ZIP_MAX_BYTES) {
+            folderDownloadOneByOne(data.files, status);
+            return;
+        }
+
+        if (btn) { btn.disabled = true; }
+        if (status) status.textContent = 'Préparation…';
+
+        try {
+            var entries = [];
+            var used = {};
+            var loaded = 0;
+            for (var i = 0; i < data.files.length; i++) {
+                var f = data.files[i];
+                if (status) status.textContent = 'Fichier ' + (i + 1) + ' / ' + data.files.length + '…';
+                var resp = await fetch(f.url, { credentials: 'same-origin' });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status + ' sur ' + f.name);
+                var buf = new Uint8Array(await resp.arrayBuffer());
+                loaded += buf.length;
+                if (loaded > FOLDER_ZIP_MAX_BYTES) throw new Error('dossier trop volumineux');
+                // Deux fichiers de même nom (sous-dossiers) ne doivent pas s'écraser
+                var entryName = (f.path ? f.path + '/' : '') + f.name;
+                if (used[entryName]) {
+                    var dot = f.name.lastIndexOf('.');
+                    var base = dot > 0 ? f.name.slice(0, dot) : f.name;
+                    var ext = dot > 0 ? f.name.slice(dot) : '';
+                    entryName = (f.path ? f.path + '/' : '') + base + '-' + (used[entryName] + 1) + ext;
+                }
+                used[(f.path ? f.path + '/' : '') + f.name] = (used[(f.path ? f.path + '/' : '') + f.name] || 0) + 1;
+                entries.push({ name: entryName, bytes: buf });
+            }
+            if (status) status.textContent = 'Création de l\'archive…';
+            folderSaveBlob(folderBuildZip(entries), data.zipName || 'dossier.zip');
+            if (status) status.textContent = '✅ Archive téléchargée';
+        } catch (err) {
+            // Un seul fichier illisible ne doit pas priver l'élève des autres.
+            if (status) status.textContent = 'Archive impossible — téléchargement fichier par fichier…';
+            folderDownloadOneByOne(data.files, status);
+        } finally {
+            if (btn) btn.disabled = false;
+            setTimeout(function () { if (status) status.textContent = ''; }, 6000);
+        }
     }
 
     // H5P Dialog Cards
@@ -5295,6 +5901,9 @@ foreach ($sections as $sIndex => $section) {
                 wrapper.classList.add('active');
                 wrapper.style.display = 'block';
                 wrapper.style.transform = '';
+                // Sans ça, la marge qui compense un zoom > 100 % laisserait une grande
+                // zone blanche sous l'activité dans le PDF.
+                wrapper.style.marginBottom = '';
                 wrapper.style.width = '';
                 wrapper.style.marginLeft = '';
                 

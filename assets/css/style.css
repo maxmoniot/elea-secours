@@ -2398,3 +2398,322 @@ a:hover {
 .h5p-generic-content {
     padding: 1rem;
 }
+
+/* =========================================================================
+   ÉVALUATIONS (quiz Moodle) — compléments
+   Rendu calqué sur Éléa : champ posé dans la phrase pour la « sélection de
+   mots », marquage juste/faux à la correction, glisser-déposer sur image,
+   ordonnancement.
+   ========================================================================= */
+
+/* Champ placé DANS une phrase (sélection de mots, cloze).
+   Sans cette règle, .form-input { width: 100% } en faisait un bloc pleine
+   largeur sur sa propre ligne : la phrase à trous devenait illisible. */
+.form-input-inline {
+    display: inline-block;
+    width: auto;
+    max-width: 100%;
+    padding: 0.15rem 0.4rem;
+    font-size: inherit;
+    vertical-align: baseline;
+}
+
+.answers-gapselect,
+.answers-cloze {
+    line-height: 2.2;
+}
+
+.answers-gapselect .gap-select,
+.answers-cloze .gap-select,
+.answers-cloze .cloze-input {
+    border: 1.5px solid var(--primary);
+    background: rgb(79 70 229 / 0.04);
+    border-radius: var(--radius-sm);
+}
+
+/* Trou dont la réponse n'existe pas dans la liste (énoncé incohérent) */
+.gap-missing {
+    color: var(--danger);
+    font-weight: 600;
+    border: 1px dashed var(--danger);
+    padding: 0 0.25rem;
+}
+
+/* --- Marquage à la correction --------------------------------------------- */
+.quiz-ok {
+    border-color: #10b981;
+    background: rgb(16 185 129 / 0.12);
+}
+
+.quiz-ko {
+    border-color: #ef4444;
+    background: rgb(239 68 68 / 0.12);
+}
+
+.ordering-item.quiz-ok,
+.ordering-item.quiz-ko {
+    border-width: 1.5px;
+}
+
+/* --- Appariement ---------------------------------------------------------- */
+.match-table .match-question p:last-child {
+    margin-bottom: 0;
+}
+
+/* --- Ordonnancement ------------------------------------------------------- */
+.answers-ordering .ordering-list {
+    padding-left: 0;
+    margin: 0;
+}
+
+.ordering-item {
+    justify-content: space-between;
+    cursor: default;
+}
+
+.ordering-buttons {
+    display: flex;
+    gap: 0.25rem;
+    flex-shrink: 0;
+}
+
+.ordering-btn {
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--gray-300);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+    line-height: 1;
+}
+
+.ordering-btn:hover:not(:disabled) {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.ordering-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* --- Glisser-déposer sur image (ddimageortext) ----------------------------- */
+.ddi-stage {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+    line-height: 0;
+}
+
+.ddi-bg {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+
+.ddi-drop {
+    position: absolute;
+    min-width: 56px;
+    min-height: 28px;
+    box-sizing: border-box;
+    border: 2px dashed var(--primary);
+    border-radius: var(--radius-sm);
+    background: rgb(255 255 255 / 0.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1.2;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.ddi-drop .ddi-drag {
+    margin: 0;
+}
+
+.ddi-drop .ddi-drop-label:not(:only-child) {
+    display: none;
+}
+
+.ddi-drop:has(.ddi-drag) .ddi-drop-label {
+    display: none;
+}
+
+.ddi-bank {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    min-height: 56px;
+    border: 1.5px dashed var(--gray-300);
+    border-radius: var(--radius);
+    background: var(--bg-tertiary);
+    line-height: 1.3;
+}
+
+.ddi-drag {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.3rem 0.55rem;
+    background: var(--bg-secondary);
+    border: 1.5px solid var(--gray-300);
+    border-radius: var(--radius-sm);
+    cursor: grab;
+    font-size: 0.9rem;
+    max-width: 100%;
+}
+
+.ddi-drag img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+
+.ddi-drag.ddi-selected {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgb(79 70 229 / 0.2);
+}
+
+.ddi-drag[draggable="false"] {
+    cursor: default;
+}
+
+/* --- Type de question non pris en charge ---------------------------------- */
+.quiz-unsupported {
+    padding: 0.75rem 1rem;
+    background: #fff3cd;
+    border: 1px solid #ffe69c;
+    border-radius: var(--radius);
+    color: #856404;
+    font-size: 0.9rem;
+}
+
+.quiz-unsupported code {
+    background: rgb(0 0 0 / 0.06);
+    padding: 0 0.25rem;
+    border-radius: 3px;
+}
+
+/* --- Récapitulatif : valeur choisie à la place du champ -------------------- */
+.quiz-recap-gap {
+    display: inline-block;
+    padding: 0 0.35rem;
+    border-bottom: 2px solid var(--primary);
+    font-weight: 600;
+}
+
+/* =========================================================================
+   ACTIVITÉ « DOSSIER » (module Moodle folder)
+   Des fichiers mis à disposition des élèves : téléchargeables un par un ou
+   tous d'un coup dans une archive.
+   ========================================================================= */
+.activity-folder .folder-body {
+    padding: 1rem;
+}
+
+.folder-intro {
+    margin-bottom: 1rem;
+    line-height: 1.6;
+}
+
+.folder-intro img {
+    max-width: 100%;
+    height: auto;
+}
+
+.folder-empty {
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.folder-files {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.folder-subfolder {
+    margin: 0.75rem 0 0.35rem;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.folder-file {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 0.75rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    margin-bottom: 0.5rem;
+}
+
+.folder-file:hover {
+    border-color: var(--primary-light);
+}
+
+.folder-file-nested {
+    margin-left: 1.25rem;
+}
+
+.folder-file-icon {
+    font-size: 1.15rem;
+    flex-shrink: 0;
+}
+
+.folder-file-name {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-primary);
+    text-decoration: none;
+    font-size: 0.92rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.folder-file-name:hover {
+    color: var(--primary);
+    text-decoration: underline;
+}
+
+.folder-file-size {
+    flex-shrink: 0;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.folder-file-btn {
+    flex-shrink: 0;
+    text-decoration: none;
+    padding: 0.2rem 0.45rem;
+    border-radius: var(--radius-sm);
+    line-height: 1;
+}
+
+.folder-file-btn:hover {
+    background: var(--gray-100);
+}
+
+.folder-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-top: 1rem;
+}
+
+.folder-download-all:disabled {
+    opacity: 0.6;
+    cursor: progress;
+}
+
+.folder-download-status {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}

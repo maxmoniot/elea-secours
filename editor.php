@@ -387,6 +387,11 @@ cleanupPdfPreviews();
                         <div class="activity-type-name">Fichiers à distribuer</div>
                         <div class="activity-type-desc">Fichiers téléchargeables par les élèves</div>
                     </div>
+                    <div class="activity-type-card" onclick="selectActivityType(this)" data-type="folder">
+                        <div class="activity-type-icon">📁</div>
+                        <div class="activity-type-name">Dossier</div>
+                        <div class="activity-type-desc">Plusieurs fichiers, à télécharger un par un ou tous d'un coup</div>
+                    </div>
                     <div class="activity-type-card" onclick="selectActivityType(this)" data-type="label">
                         <div class="activity-type-icon">💬</div>
                         <div class="activity-type-name">Étiquette</div>

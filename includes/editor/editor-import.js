@@ -257,7 +257,7 @@ function showImportSelector(importedCourse) {
                            onchange="updateImportActivityCheck(${sIdx})">
                     <span class="import-activity-icon">${icon}</span>
                     <span class="import-activity-name">${escapeHtml(activity.name || 'Activité')}</span>
-                    <span class="import-activity-type">${activity.type === 'mapmodules' ? 'Carte de Progression' : (activity.type === 'quiz' ? (activity.quizType === 'ddimageortext' ? 'Glisser-Déposer Image' : 'Quiz') : (activity.type === 'assign' ? 'Travail à déposer' : (activity.type === 'resource' ? 'Fichiers à distribuer' : (activity.h5pType || activity.type))))}</span>
+                    <span class="import-activity-type">${activity.type === 'mapmodules' ? 'Carte de Progression' : (activity.type === 'quiz' ? (activity.quizType === 'ddimageortext' ? 'Glisser-Déposer Image' : 'Quiz') : (activity.type === 'assign' ? 'Travail à déposer' : (activity.type === 'resource' ? 'Fichiers à distribuer' : (activity.type === 'folder' ? 'Dossier' : (activity.h5pType || activity.type)))))}</span>
                 </div>`;
         });
         
@@ -396,9 +396,9 @@ function confirmImportSelection() {
                     }
                     newAct.intro = activity.intro || '';
                 }
-                // Copier les champs spécifiques resource (fichiers à distribuer)
-                if (activity.type === 'resource') {
-                    newAct.type = 'resource';
+                // Copier les champs spécifiques resource (fichiers à distribuer) et folder (dossier)
+                if (activity.type === 'resource' || activity.type === 'folder') {
+                    newAct.type = activity.type;
                     newAct.files = (activity.files || []).map(f => ({
                         fileUrl: f.fileUrl || null,
                         fileName: f.fileName || null

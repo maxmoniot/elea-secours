@@ -66,6 +66,26 @@ define('QUIZ_TYPES_PATH', ROOT_PATH . '/quiz-types');
 define('ALLOWED_EXTENSIONS', ['mbz']);
 define('MAX_UPLOAD_SIZE', 200 * 1024 * 1024); // 200 Mo par fichier
 
+// === GARDE-FOUS DES DÉPÔTS DE FICHIERS (éditeur) ===
+// Le site est public : le code professeur circule. Sans plafond côté SERVEUR, un seul
+// compte pouvait remplir l'hébergement — le contrôle affiché dans l'éditeur (200 Mo)
+// n'existait qu'en JavaScript, donc contournable et absent des dépôts de pièces jointes.
+define('MAX_ATTACHMENT_SIZE', 50 * 1024 * 1024);   // 50 Mo par pièce jointe (Dossier, Fichiers à distribuer, Travail à déposer)
+define('MAX_MEDIA_SIZE',     100 * 1024 * 1024);   // 100 Mo par image / son / vidéo
+define('MAX_COURSE_BYTES',   200 * 1024 * 1024);   // 200 Mo pour un cours en création (= l'indicateur de l'éditeur)
+// Plafond du NOMBRE de fichiers : c'est lui qui arrête l'autre façon de saturer le
+// serveur — des milliers de fichiers minuscules, qui passeraient sous le plafond en Mo.
+// Réglé bien au-dessus du réel : les vrais cours de Max vont de 360 à 1065 fichiers
+// (relevé sur les .mbz de 2026), un import en compte donc autant.
+define('MAX_COURSE_FILES',   3000);
+// Extensions refusées à l'envoi : exécutables et scripts. Les dossiers de données ont
+// aussi un .htaccess qui coupe toute exécution — ceci est la deuxième barrière.
+define('FORBIDDEN_UPLOAD_EXTENSIONS', [
+    'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phps', 'pht', 'phtml', 'shtml',
+    'cgi', 'pl', 'py', 'rb', 'jsp', 'asp', 'aspx', 'htaccess', 'htpasswd',
+    'exe', 'msi', 'bat', 'cmd', 'com', 'scr', 'vbs', 'ps1', 'sh', 'jar', 'dll', 'so',
+]);
+
 // === BIBLIOTHÈQUES H5P SUPPORTÉES ===
 // Liste des bibliothèques H5P disponibles (nom machine => version)
 $H5P_LIBRARIES = [

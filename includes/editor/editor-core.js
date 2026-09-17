@@ -124,7 +124,7 @@ function renderTree() {
         
         (section.activities || []).forEach((activity, aIdx) => {
             const actSelected = selectedActivity === activity.id;
-            const icon = getActivityIcon(['assign','resource','mapmodules','label','page'].includes(activity.type) ? activity.type : (activity.quizType || activity.h5pType || activity.type));
+            const icon = getActivityIcon(['assign','resource','folder','mapmodules','label','page'].includes(activity.type) ? activity.type : (activity.quizType || activity.h5pType || activity.type));
             const actHidden = activity.visible === false || sectionHidden;
             const actOwnHidden = activity.visible === false;
             const actDimClass = actHidden ? ' tree-hidden' : '';
@@ -860,6 +860,7 @@ function getActivityIcon(type) {
         'mapmodules': '🗺️',
         'assign': '📤',   /* dépôt élève — distinct de l'évaluation (📋/📝) */
         'resource': '📎',
+        'folder': '📁',   /* dossier de fichiers a telecharger */
         'ThreeImage': '🌐',
         'MultiMediaChoice': '🖼️',
         'GameMap': '🧭',
@@ -1047,6 +1048,14 @@ function confirmAddActivity() {
             files: [],
             intro: ''
         };
+    } else if (selectedActivityType === 'folder') {
+        activity = {
+            id: generateId(),
+            type: 'folder',
+            name: getActivityDefaultName('folder'),
+            files: [],
+            intro: ''
+        };
     } else if (selectedActivityType === 'label' || selectedActivityType === 'page') {
         activity = createTextModuleActivity(selectedActivityType);
         activity.name = getActivityDefaultName(selectedActivityType);
@@ -1115,6 +1124,7 @@ function getActivityDefaultName(type) {
         'mapmodules': 'Carte de progression',
         'assign': 'Nouveau travail à déposer',
         'resource': 'Nouveaux fichiers à distribuer',
+        'folder': 'Nouveau dossier',
         'label': 'Nouvelle étiquette',
         'page': 'Nouvelle page',
         'ddimageortext': 'Nouveau glisser-déposer image'
@@ -1469,7 +1479,8 @@ function renderActivityEditor() {
         renderAssignEditor(activity);
         return;
     }
-    if (activity.type === 'resource') {
+    if (activity.type === 'resource' || activity.type === 'folder') {
+        // Meme interface : une liste de fichiers + une description.
         renderResourceEditor(activity);
         return;
     }
@@ -1866,6 +1877,12 @@ function assignUploadFiles(input, activityId) {
             if (pending <= 0) assignRenderFileList(activity);
             return;
         }
+        // Taille du cours et place serveur (le serveur revalide : refusUpload).
+        if (typeof canAddContent === 'function' && !canAddContent(file.size || 0)) {
+            pending--;
+            if (pending <= 0) assignRenderFileList(activity);
+            return;
+        }
         
         const formData = new FormData();
         formData.append('file', file);
@@ -1968,12 +1985,14 @@ function renderResourceEditor(activity) {
     
     if (!activity.files) activity.files = [];
     const intro = activity.intro || '';
+    // Le « Dossier » partage cette interface : seuls l'icone et le sous-titre changent.
+    const estDossier = activity.type === 'folder';
     
     content.innerHTML = `
         <div class="section-preview">
             <div class="section-preview-header">
-                ${editorHeaderHtml('📎', activity.name, sectionId)}
-                <p class="section-preview-desc">Fichiers téléchargeables par les élèves</p>
+                ${editorHeaderHtml(estDossier ? '📁' : '📎', activity.name, sectionId)}
+                <p class="section-preview-desc">${estDossier ? 'Dossier : les élèves téléchargent les fichiers un par un ou tous d\'un coup' : 'Fichiers téléchargeables par les élèves'}</p>
             </div>
             <div style="padding: 1.5rem;">
                 <div style="background: var(--gray-50); border-radius: 12px; padding: 1.5rem; border: 2px dashed var(--gray-300);">
@@ -2041,6 +2060,14 @@ function resourceUploadFiles(input, activityId) {
     let pending = input.files.length;
     
     Array.from(input.files).forEach(file => {
+        // Meme controle que pour les images : taille du cours et place serveur.
+        // Le serveur revalide de toute facon (refusUpload dans editor_api.php) ;
+        // ici c'est pour prevenir tout de suite au lieu d'envoyer pour rien.
+        if (typeof canAddContent === 'function' && !canAddContent(file.size || 0)) {
+            pending--;
+            if (pending <= 0) resourceRenderFileList(activity);
+            return;
+        }
         const formData = new FormData();
         formData.append('file', file);
         formData.append('action', 'upload_assign_file');
@@ -2328,8 +2355,8 @@ function renderStructureView() {
                 <div class="structure-activities" id="structureActivities-${section.id}">`;
         
         activities.forEach((activity, aIdx) => {
-            const icon = getActivityIcon(['assign','resource','mapmodules','label','page'].includes(activity.type) ? activity.type : (activity.quizType || activity.h5pType || activity.type));
-            const typeLabel = activity.type === 'mapmodules' ? 'Carte de Progression' : (activity.type === 'assign' ? 'Travail à déposer' : (activity.type === 'resource' ? 'Fichiers à distribuer' : (activity.type === 'label' ? 'Étiquette' : (activity.type === 'page' ? 'Page' : (activity.quizType === 'ddimageortext' ? 'Glisser Image' : (activity.h5pType === 'CoursePresentation' ? 'Parcours' : (activity.h5pType === 'ThreeImage' ? 'Visite 360' : (activity.h5pType === 'GameMap' ? 'Carte à explorer' : (activity.h5pType === 'ImageSequencing' ? 'Remettre dans l\'ordre' : (activity.h5pType === 'MemoryGame' ? 'Memory' : (activity.h5pType === 'ImageMultipleHotspotQuestion' ? 'Trouver les zones' : (activity.h5pType || activity.type))))))))))));
+            const icon = getActivityIcon(['assign','resource','folder','mapmodules','label','page'].includes(activity.type) ? activity.type : (activity.quizType || activity.h5pType || activity.type));
+            const typeLabel = activity.type === 'mapmodules' ? 'Carte de Progression' : (activity.type === 'assign' ? 'Travail à déposer' : (activity.type === 'resource' ? 'Fichiers à distribuer' : (activity.type === 'folder' ? 'Dossier' : (activity.type === 'label' ? 'Étiquette' : (activity.type === 'page' ? 'Page' : (activity.quizType === 'ddimageortext' ? 'Glisser Image' : (activity.h5pType === 'CoursePresentation' ? 'Parcours' : (activity.h5pType === 'ThreeImage' ? 'Visite 360' : (activity.h5pType === 'GameMap' ? 'Carte à explorer' : (activity.h5pType === 'ImageSequencing' ? 'Remettre dans l\'ordre' : (activity.h5pType === 'MemoryGame' ? 'Memory' : (activity.h5pType === 'ImageMultipleHotspotQuestion' ? 'Trouver les zones' : (activity.h5pType || activity.type)))))))))))));
             const actHidden = activity.visible === false || secHidden;
             const actOwnHidden = activity.visible === false;
             const actDimStyle = actHidden ? ' style="opacity: 0.45;"' : '';

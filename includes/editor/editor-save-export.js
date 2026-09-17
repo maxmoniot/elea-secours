@@ -744,7 +744,7 @@ function loadParsedCourse(parsedCourse) {
                         content: activity.content || {}
                     };
                     // Ne pas garder h5pType pour les types non-H5P
-                    if (['assign', 'resource', 'mapmodules', 'quiz', 'label', 'page'].includes(act.type)) {
+                    if (['assign', 'resource', 'folder', 'mapmodules', 'quiz', 'label', 'page'].includes(act.type)) {
                         act.h5pType = '';
                     }
                     // Copier les champs spécifiques mapmodules
@@ -775,9 +775,9 @@ function loadParsedCourse(parsedCourse) {
                         }
                         act.intro = activity.intro || '';
                     }
-                    // Copier les champs spécifiques resource (fichiers à distribuer)
-                    if (activity.type === 'resource') {
-                        act.type = 'resource';
+                    // Copier les champs spécifiques resource (fichiers à distribuer) et folder (dossier)
+                    if (activity.type === 'resource' || activity.type === 'folder') {
+                        act.type = activity.type;
                         act.files = (activity.files || []).map(f => ({
                             fileUrl: f.fileUrl || null,
                             fileName: f.fileName || null
@@ -1010,9 +1010,19 @@ function exportElea() {
         if (_exportAnnule || !r) return null;
         console.log('[Export] HTTP', r.status, r.statusText);
         if (!r.ok) {
-            return r.text().then(function(t) { 
+            return r.text().then(function(t) {
                 console.error('[Export] Réponse erreur:', t.substring(0, 500));
-                throw new Error('Erreur serveur: HTTP ' + r.status); 
+                // Un 500 au bout de deux ou trois minutes sur un serveur mutualisé,
+                // c'est la limite de temps d'exécution, pas un bug du cours. Les médias
+                // déjà récupérés restent en cache : la tentative suivante repart de là
+                // et va beaucoup plus vite. Le dire, plutôt qu'un « HTTP 500 » opaque.
+                var secondes = Math.round((Date.now() - _exportStart) / 1000);
+                if (r.status >= 500 && secondes > 100) {
+                    throw new Error("le serveur a interrompu l'export au bout de "
+                        + secondes + " s (limite de temps du serveur). Relancez l'export : "
+                        + "les médias déjà téléchargés sont conservés, ce sera plus rapide.");
+                }
+                throw new Error('Erreur serveur: HTTP ' + r.status);
             });
         }
         return r.text().then(function(t) {

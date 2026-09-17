@@ -9,12 +9,54 @@ class CourseRenderer {
     private string $baseUrl;
     private bool $printMode = false;
     private ?array $fileIndex = null;
-    
+    private string $downloadBaseUrl = '';
+
     public function __construct(array $courseData, string $basePath, string $baseUrl) {
         $this->courseData = $courseData;
         $this->basePath = $basePath;
         $this->baseUrl = $baseUrl;
         $this->fileIndex = $courseData['file_index'] ?? null;
+    }
+
+    /**
+     * Base d'URL des fichiers qu'un élève TÉLÉCHARGE (activité « Dossier »), quand le
+     * cours est servi par notre domaine (dossier du cours, file.php…).
+     */
+    public function setDownloadBaseUrl(string $url): void {
+        $this->downloadBaseUrl = $url;
+    }
+
+    /**
+     * URL de téléchargement d'un fichier de dossier, avec l'info « même origine ».
+     *
+     * Deux situations :
+     *  - cours servi par notre domaine → URL locale : l'attribut `download` impose le nom
+     *    du fichier, et le navigateur peut lire les octets (archive « tout télécharger ») ;
+     *  - cours servi directement depuis Google Drive → on demande à Drive le
+     *    TÉLÉCHARGEMENT (`export=download`) et non l'aperçu, pour que le fichier arrive
+     *    avec son vrai nom. Mais c'est une AUTRE origine : le navigateur refuse d'en lire
+     *    les octets, donc pas d'archive possible — le lecteur enchaîne alors les
+     *    téléchargements un par un.
+     *
+     * @return array{url:string,sameOrigin:bool}
+     */
+    private function getDownloadUrl(string $hash, string $filename): array {
+        if ($this->fileIndex && isset($this->fileIndex['files'][$hash])) {
+            return [
+                'url' => 'https://drive.google.com/uc?id=' . $this->fileIndex['files'][$hash] . '&export=download',
+                'sameOrigin' => false,
+            ];
+        }
+        if ($this->downloadBaseUrl === '') {
+            return ['url' => $this->getFileUrl($hash), 'sameOrigin' => false];
+        }
+        // `files/<2 premiers caractères>/<sha1>` : que des caractères sûrs en URL.
+        $path = 'files/' . substr($hash, 0, 2) . '/' . $hash;
+        // Les bases « …php?…&file= » se complètent, un dossier se préfixe avec un /
+        $url = (strpos($this->downloadBaseUrl, '?') !== false)
+            ? $this->downloadBaseUrl . $path
+            : rtrim($this->downloadBaseUrl, '/') . '/' . $path;
+        return ['url' => $url, 'sameOrigin' => true];
     }
     
     public function setPrintMode(bool $mode): void {
@@ -3526,7 +3568,7 @@ class CourseRenderer {
         $id = 'quiz-' . $activity['module_id'];
         $questions = $activity['questions'] ?? [];
         $totalQuestions = count($questions);
-        
+
         ob_start();
         ?>
         <div class="activity activity-quiz" id="<?= $id ?>" data-total-questions="<?= $totalQuestions ?>">
@@ -3537,13 +3579,13 @@ class CourseRenderer {
             <?php if (!empty($activity['intro'])): ?>
             <div class="activity-intro"><?= $this->processContent($activity['intro']) ?></div>
             <?php endif; ?>
-            
+
             <?php if (empty($questions)): ?>
             <div class="h5p-placeholder" style="margin:1rem;">
                 <p>Quiz sans questions</p>
             </div>
             <?php else: ?>
-            
+
             <!-- Barre de progression -->
             <div class="quiz-progress" style="padding:1rem 1rem 0;">
                 <div class="quiz-progress-text">Question <span class="quiz-current-q">1</span> / <?= $totalQuestions ?></div>
@@ -3551,25 +3593,38 @@ class CourseRenderer {
                     <div class="quiz-progress-fill" style="width: <?= (1 / $totalQuestions) * 100 ?>%"></div>
                 </div>
             </div>
-            
+
             <div class="quiz-questions" style="padding:1rem;">
-                <?php foreach ($questions as $qi => $q): ?>
-                <div class="quiz-question <?= $qi === 0 ? 'active' : '' ?>" data-qindex="<?= $qi ?>" data-qtype="<?= $q['qtype'] ?>" style="<?= $qi === 0 ? '' : 'display:none;' ?>">
+                <?php foreach ($questions as $qi => $q):
+                    $qtype = $q['qtype'] ?? '';
+                    // L'énoncé des questions « à trous » est rendu DANS le bloc de réponses
+                    // (c'est lui qui porte les listes déroulantes) : le répéter ici
+                    // l'afficherait deux fois, la première avec les marqueurs [[1]] bruts.
+                    $inlineText = $this->quizTextIsInline($qtype);
+                    $answersHtml = $this->renderQuizAnswers($q, $id . "-" . $qi);
+                    // Un cloze n'est corrigeable que si ses trous ont bien été reconnus
+                    // dans l'énoncé ; sinon il resterait à 0 sans que l'élève y soit pour rien.
+                    $autoScored = $this->quizIsAutoScored($qtype)
+                        || ($qtype === 'multianswer' && strpos($answersHtml, 'cloze-input') !== false);
+                ?>
+                <div class="quiz-question <?= $qi === 0 ? 'active' : '' ?>" data-qindex="<?= $qi ?>" data-qtype="<?= htmlspecialchars($qtype) ?>" data-autoscore="<?= $autoScored ? '1' : '0' ?>" style="<?= $qi === 0 ? '' : 'display:none;' ?>">
                     <div class="question-header">
                         <span class="question-number"><?= $qi + 1 ?></span>
-                        <div class="question-text"><?= $this->processContent($q['text'] ?? $q['questiontext'] ?? '') ?></div>
+                        <?php if (!$inlineText): ?>
+                        <div class="question-text"><?= $this->processContent($this->quizQuestionText($q)) ?></div>
+                        <?php endif; ?>
                     </div>
-                    <?= $this->renderQuizAnswers($q) ?>
+                    <?= $answersHtml ?>
                 </div>
                 <?php endforeach; ?>
             </div>
-            
+
             <div class="quiz-navigation" style="padding:0 1rem 1rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
                 <button class="btn btn-secondary quiz-prev-btn" onclick="quizPrevQuestion('<?= $id ?>')" style="display:none;">← Précédent</button>
                 <button class="btn btn-primary quiz-next-btn" onclick="quizNextQuestion('<?= $id ?>')">Question suivante →</button>
                 <button class="btn btn-success quiz-submit-btn" onclick="showQuizRecap('<?= $id ?>')" style="display:none;">📋 Vérifier mes réponses</button>
             </div>
-            
+
             <!-- Récapitulatif avant validation -->
             <div class="quiz-recap" style="display:none; padding:1rem;">
                 <div class="quiz-recap-header">
@@ -3583,11 +3638,11 @@ class CourseRenderer {
                     <button class="btn btn-success quiz-final-submit-btn" onclick="finalSubmitQuiz('<?= $id ?>')">✓ Terminer et valider</button>
                 </div>
             </div>
-            
+
             <div class="quiz-actions" style="padding:0 1rem 1rem; display:none;">
                 <button class="btn btn-secondary quiz-restart-btn" onclick="resetQuiz('<?= $id ?>')">🔄 Recommencer</button>
             </div>
-            
+
             <div class="quiz-results" style="display:none;margin:0 1rem 1rem;">
                 <div class="quiz-score"></div>
             </div>
@@ -3602,23 +3657,88 @@ class CourseRenderer {
         <?php
         return ob_get_clean();
     }
-    
-    private function renderQuizAnswers(array $q): string {
-        $qtype = $q['qtype'];
-        
+
+    /** Énoncé d'une question, quelle que soit l'origine (MbzParser => text, éditeur => questiontext). */
+    private function quizQuestionText(array $q): string {
+        return (string)($q['text'] ?? $q['questiontext'] ?? '');
+    }
+
+    /**
+     * Types dont l'énoncé porte lui-même les trous : il est rendu par renderQuizAnswers()
+     * et ne doit donc pas être répété dans l'en-tête de la question.
+     */
+    private function quizTextIsInline(string $qtype): bool {
+        return in_array($qtype, ['gapselect', 'ddwtos', 'multianswer'], true);
+    }
+
+    /**
+     * Types que le lecteur sait corriger tout seul. Les autres (rédaction, description,
+     * types non gérés) ne doivent pas entrer dans le score : sinon l'élève est noté 0
+     * sur une question à laquelle il a pourtant répondu.
+     */
+    private function quizIsAutoScored(string $qtype): bool {
+        return in_array($qtype, [
+            'multichoice', 'truefalse', 'shortanswer', 'numerical',
+            'match', 'gapselect', 'ddwtos', 'ddimageortext', 'ordering',
+        ], true);
+    }
+
+    /**
+     * Retrouve un fichier de question (glisser-déposer sur image) par composant/zone/itemid.
+     * Moodle range ces images en component=qtype_ddimageortext, filearea=bgimage
+     * (itemid = id de la question) ou dragimage (itemid = id du drag).
+     */
+    private function findQuestionFileUrl(string $component, string $filearea, int $itemid): ?string {
+        foreach ($this->courseData['files'] ?? [] as $file) {
+            if (($file['component'] ?? '') === $component
+                && ($file['filearea'] ?? '') === $filearea
+                && (int)($file['itemid'] ?? -1) === $itemid
+                && ($file['filename'] ?? '.') !== '.') {
+                return $this->getFileUrl($file['hash']);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @param string $uid identifiant unique de la question DANS la page : une même
+     *        question de la banque peut servir dans deux évaluations du même cours, et
+     *        des boutons radio de même `name` se désélectionneraient mutuellement.
+     */
+    private function renderQuizAnswers(array $q, string $uid = ""): string {
+        $qtype = $q['qtype'] ?? '';
+
         ob_start();
-        
+
         if ($qtype === 'multichoice' || $qtype === 'truefalse') {
-            $single = $qtype === 'truefalse' || count(array_filter($q['answers'] ?? [], fn($a) => $a['fraction'] > 0)) === 1;
+            $answers = array_values($q['answers'] ?? []);
+            $positives = count(array_filter($answers, fn($a) => (float)($a['fraction'] ?? 0) > 0));
+            $single = $qtype === 'truefalse'
+                ? true
+                : (isset($q['single']) ? (bool)$q['single'] : $positives <= 1);
+            // Moodle mélange les propositions d'un QCM quand shuffleanswers est actif ;
+            // Vrai/Faux garde toujours son ordre.
+            $order = count($answers) ? range(0, count($answers) - 1) : [];
+            if ($qtype === 'multichoice' && !empty($q['shuffle_answers']) && count($answers) > 1) {
+                shuffle($order);
+            }
+            $numbering = (string)($q['answer_numbering'] ?? 'abc');
+            $letters = range('a', 'z');
             ?>
             <div class="answers-multichoice">
-                <?php foreach ($q['answers'] ?? [] as $ai => $answer): ?>
+                <?php foreach ($order as $pos => $ai):
+                    if (!isset($answers[$ai])) continue;
+                    $answer = $answers[$ai];
+                ?>
                 <label class="answer-option">
-                    <input type="<?= $single ? 'radio' : 'checkbox' ?>" 
-                           name="q<?= $q['id'] ?>" 
+                    <input type="<?= $single ? 'radio' : 'checkbox' ?>"
+                           name="q<?= htmlspecialchars($uid !== '' ? $uid : (string)($q['id'] ?? 0)) ?>"
                            value="<?= $ai ?>"
-                           data-fraction="<?= $answer['fraction'] ?>">
-                    <span class="answer-text"><?= $this->processContent($answer['text']) ?></span>
+                           data-fraction="<?= (float)($answer['fraction'] ?? 0) ?>">
+                    <?php if ($numbering !== 'none' && isset($letters[$pos])): ?>
+                    <span class="answer-marker"><?= $letters[$pos] ?>.</span>
+                    <?php endif; ?>
+                    <span class="answer-text"><?= $this->processContent($answer['text'] ?? '') ?></span>
                 </label>
                 <?php endforeach; ?>
             </div>
@@ -3626,61 +3746,260 @@ class CourseRenderer {
         } elseif ($qtype === 'shortanswer') {
             ?>
             <div class="answers-shortanswer">
-                <input type="text" class="form-input answer-input" placeholder="Votre réponse...">
+                <input type="text" class="form-input answer-input" autocomplete="off" placeholder="Votre réponse...">
+            </div>
+            <?php
+        } elseif ($qtype === 'numerical') {
+            ?>
+            <div class="answers-numerical">
+                <input type="text" inputmode="decimal" class="form-input answer-input" autocomplete="off" placeholder="Votre réponse (nombre)...">
             </div>
             <?php
         } elseif ($qtype === 'match') {
-            $leftItems = $q['matchings'] ?? $q['subquestions'] ?? [];
-            $rightItems = array_column($leftItems, 'answer');
-            shuffle($rightItems);
+            $allItems = $q['matchings'] ?? $q['subquestions'] ?? [];
+            // Moodle autorise des « distracteurs » : des paires sans énoncé, dont la
+            // réponse enrichit la liste déroulante sans donner lieu à une ligne.
+            $rows = array_values(array_filter($allItems, function($m) {
+                return trim(strip_tags((string)($m['question'] ?? ''))) !== '';
+            }));
+            $options = [];
+            foreach ($allItems as $m) {
+                $ans = (string)($m['answer'] ?? '');
+                if ($ans !== '' && !in_array($ans, $options, true)) $options[] = $ans;
+            }
+            shuffle($options);
             ?>
             <div class="answers-match">
                 <table class="match-table">
-                    <?php foreach ($leftItems as $mi => $match): ?>
+                    <tbody>
+                    <?php foreach ($rows as $mi => $match): ?>
                     <tr data-match-id="<?= $mi ?>">
-                        <td><?= $this->processContent($match['question']) ?></td>
-                        <td>
-                            <select class="form-input" data-correct="<?= htmlspecialchars($match['answer']) ?>">
+                        <td class="match-question"><?= $this->processContent($match['question']) ?></td>
+                        <td class="match-arrow">→</td>
+                        <td class="match-select">
+                            <select class="form-input match-input" data-correct="<?= htmlspecialchars((string)($match['answer'] ?? ''), ENT_QUOTES) ?>">
                                 <option value="">Choisir...</option>
-                                <?php foreach ($rightItems as $right): ?>
-                                <option value="<?= htmlspecialchars($right) ?>"><?= htmlspecialchars($right) ?></option>
+                                <?php foreach ($options as $right): ?>
+                                <option value="<?= htmlspecialchars($right, ENT_QUOTES) ?>"><?= htmlspecialchars($right) ?></option>
                                 <?php endforeach; ?>
                             </select>
                         </td>
                     </tr>
                     <?php endforeach; ?>
+                    </tbody>
                 </table>
             </div>
             <?php
         } elseif ($qtype === 'gapselect' || $qtype === 'ddwtos') {
-            // Questions à trous avec sélection
-            $choices = $q['choices'] ?? [];
-            $text = $q['text'] ?? '';
-            
-            // Remplace [[n]] par des select
-            $output = preg_replace_callback('/\[\[(\d+)\]\]/', function($matches) use ($choices) {
-                $group = (int)$matches[1];
-                $groupChoices = array_filter($choices, fn($c) => ($c['group'] ?? 1) == $group);
-                
-                $html = '<select class="form-input form-input-inline gapselect-input" data-group="' . $group . '">';
-                $html .= '<option value="">...</option>';
-                foreach ($groupChoices as $choice) {
-                    $html .= '<option value="' . htmlspecialchars($choice['text']) . '">' . htmlspecialchars($choice['text']) . '</option>';
+            // Sélection de mots (Moodle « gapselect ») :
+            //   - [[n]] désigne la n-ième RÉPONSE de la liste (1-based), PAS un numéro de groupe ;
+            //   - la liste déroulante propose toutes les réponses du GROUPE de cette n-ième réponse ;
+            //   - la bonne réponse est donc la n-ième de la liste.
+            // Exemple : réponses 1 à 4 en groupe A, 5 et 6 en groupe B. [[5]] propose le
+            // groupe B et attend la 5e réponse. L'ancien code lisait [[n]] comme un numéro
+            // de groupe : juste par hasard quand n == groupe, liste VIDE sinon.
+            $choices = array_values($q['choices'] ?? []);
+            $text = $this->quizQuestionText($q);
+            $shuffle = !isset($q['shuffle_answers']) || !empty($q['shuffle_answers']);
+
+            // Ordre d'affichage calculé une fois par groupe : tous les trous d'un même
+            // groupe proposent la même liste dans le même ordre (comportement Moodle).
+            // Sans mélange, la bonne réponse de [[1]] serait toujours la première proposée.
+            $byGroup = [];
+            foreach ($choices as $i => $c) {
+                $g = (string)($c['group'] ?? 1);
+                $byGroup[$g][] = $i;
+            }
+            if ($shuffle) {
+                foreach ($byGroup as $g => $idxs) {
+                    shuffle($idxs);
+                    $byGroup[$g] = $idxs;
+                }
+            }
+
+            $gapNo = 0;
+            $output = preg_replace_callback('/\[\[(\d+)\]\]/', function($matches) use ($choices, $byGroup, &$gapNo) {
+                $n = (int)$matches[1];
+                $gapNo++;
+                $answer = $choices[$n - 1] ?? null;
+                if ($answer === null) {
+                    return '<span class="gap-select gap-missing" title="Réponse n°' . $n . ' absente de la liste">[[' . $n . ']]</span>';
+                }
+                $group = (string)($answer['group'] ?? 1);
+                $html = '<select class="form-input form-input-inline gap-select gapselect-input"'
+                      . ' data-gap="' . $gapNo . '"'
+                      . ' data-answer-index="' . $n . '"'
+                      . ' data-group="' . htmlspecialchars($group, ENT_QUOTES) . '"'
+                      . ' data-correct="' . htmlspecialchars((string)($answer['text'] ?? ''), ENT_QUOTES) . '"'
+                      . ' aria-label="Trou n°' . $gapNo . '">';
+                $html .= '<option value="">Choisir...</option>';
+                foreach ($byGroup[$group] ?? [] as $ci) {
+                    $t = (string)($choices[$ci]['text'] ?? '');
+                    $html .= '<option value="' . htmlspecialchars($t, ENT_QUOTES) . '">' . htmlspecialchars($t) . '</option>';
                 }
                 $html .= '</select>';
                 return $html;
             }, $text);
-            
-            echo '<div class="answers-gapselect">' . $output . '</div>';
+
+            echo '<div class="answers-gapselect gapselect-text">' . $this->processContent($output) . '</div>';
+        } elseif ($qtype === 'ddimageortext') {
+            echo $this->renderQuizDdImageOrText($q);
+        } elseif ($qtype === 'ordering') {
+            $items = array_values($q['items'] ?? []);
+            // $items est déjà trié dans l'ordre correct (fraction décroissante) par MbzParser.
+            $order = count($items) ? range(0, count($items) - 1) : [];
+            if (count($items) > 1) {
+                $tries = 0;
+                do { shuffle($order); $tries++; }
+                while ($tries < 10 && $order === range(0, count($items) - 1));
+            }
+            ?>
+            <div class="answers-ordering">
+                <p class="ordering-hint">Remettez les éléments dans le bon ordre (flèches ▲ ▼).</p>
+                <ul class="ordering-list">
+                    <?php foreach ($order as $oi): if (!isset($items[$oi])) continue; ?>
+                    <li class="ordering-item" data-correct-index="<?= $oi ?>">
+                        <span class="ordering-text"><?= htmlspecialchars((string)($items[$oi]['text'] ?? '')) ?></span>
+                        <span class="ordering-buttons">
+                            <button type="button" class="ordering-btn" onclick="quizMoveOrderingItem(this,-1)" aria-label="Monter">▲</button>
+                            <button type="button" class="ordering-btn" onclick="quizMoveOrderingItem(this,1)" aria-label="Descendre">▼</button>
+                        </span>
+                    </li>
+                    <?php endforeach; ?>
+                </ul>
+            </div>
+            <?php
+        } elseif ($qtype === 'essay') {
+            ?>
+            <div class="answers-essay">
+                <textarea class="form-input essay-input" rows="8" placeholder="Votre réponse..."></textarea>
+                <p class="essay-note">✍️ Question à correction manuelle : elle n'entre pas dans le score automatique.</p>
+            </div>
+            <?php
+        } elseif ($qtype === 'description') {
+            // Une « description » n'attend aucune réponse : l'énoncé suffit.
+            echo '';
+        } elseif ($qtype === 'multianswer') {
+            echo $this->renderQuizCloze($q);
         } else {
             ?>
-            <div class="answers-generic">
-                <textarea class="form-input" rows="3" placeholder="Votre réponse..."></textarea>
+            <div class="answers-generic quiz-unsupported">
+                ⚠️ Ce type de question (<code><?= htmlspecialchars($qtype) ?></code>) n'est pas pris en charge par Éléa-Secours.
+                Ouvrez l'activité sur Éléa pour y répondre.
             </div>
             <?php
         }
-        
+
         return ob_get_clean();
+    }
+
+    /**
+     * Glisser-déposer sur image (ddimageortext) : image de fond + zones de dépôt
+     * positionnées en pixels, et étiquettes (texte ou image) à faire glisser.
+     */
+    private function renderQuizDdImageOrText(array $q): string {
+        $drags = array_values($q['drags'] ?? []);
+        $drops = array_values($q['drops'] ?? []);
+        $bgUrl = $this->findQuestionFileUrl('qtype_ddimageortext', 'bgimage', (int)($q['id'] ?? 0));
+
+        if ($bgUrl === null || empty($drops)) {
+            ob_start(); ?>
+            <div class="answers-generic quiz-unsupported">
+                ⚠️ Cette question « glisser-déposer sur image » est incomplète (image de fond introuvable).
+            </div>
+            <?php return ob_get_clean();
+        }
+
+        // Image de chaque étiquette (facultative : une étiquette peut être du texte).
+        foreach ($drags as $i => $d) {
+            $drags[$i]['img'] = $this->findQuestionFileUrl('qtype_ddimageortext', 'dragimage', (int)($d['drag_id'] ?? 0));
+        }
+        if (!empty($q['shuffleanswers'])) {
+            shuffle($drags);
+        }
+
+        $uid = 'ddi-' . (int)($q['id'] ?? 0) . '-' . substr(md5(serialize($drops)), 0, 6);
+
+        ob_start();
+        ?>
+        <div class="answers-ddimageortext" id="<?= $uid ?>">
+            <p class="ordering-hint">Faites glisser chaque étiquette sur la bonne zone (ou cliquez l'étiquette puis la zone).</p>
+            <div class="ddi-stage">
+                <img class="ddi-bg" src="<?= htmlspecialchars($bgUrl) ?>" alt="" onload="quizDdiSync(this)">
+                <?php foreach ($drops as $di => $drop): ?>
+                <div class="ddi-drop"
+                     data-drop="<?= (int)($drop['no'] ?? ($di + 1)) ?>"
+                     data-choice="<?= (int)($drop['choice'] ?? 0) ?>"
+                     data-x="<?= (int)($drop['x'] ?? 0) ?>"
+                     data-y="<?= (int)($drop['y'] ?? 0) ?>"
+                     ondragover="event.preventDefault()"
+                     ondrop="quizDdiDrop(event, this)"
+                     onclick="quizDdiPlace(this)"><span class="ddi-drop-label"><?= htmlspecialchars((string)($drop['label'] ?? '')) ?></span></div>
+                <?php endforeach; ?>
+            </div>
+            <div class="ddi-bank" ondragover="event.preventDefault()" ondrop="quizDdiDropBack(event, this)">
+                <?php foreach ($drags as $drag): ?>
+                <div class="ddi-drag" draggable="true"
+                     data-no="<?= (int)($drag['no'] ?? 0) ?>"
+                     data-group="<?= (int)($drag['group'] ?? 1) ?>"
+                     data-infinite="<?= !empty($drag['infinite']) ? '1' : '0' ?>"
+                     ondragstart="quizDdiDragStart(event, this)"
+                     onclick="quizDdiSelect(event, this)">
+                    <?php if (!empty($drag['img'])): ?>
+                    <img src="<?= htmlspecialchars($drag['img']) ?>" alt="<?= htmlspecialchars((string)($drag['label'] ?? '')) ?>">
+                    <?php else: ?>
+                    <?= htmlspecialchars((string)($drag['label'] ?? '')) ?>
+                    <?php endif; ?>
+                </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
+    /**
+     * Cloze / « réponses intégrées » (multianswer) : l'énoncé contient des sous-questions
+     * du type {1:MULTICHOICE:=bon~mauvais} ou {1:SHORTANSWER:=réponse}.
+     */
+    private function renderQuizCloze(array $q): string {
+        $text = $this->quizQuestionText($q);
+        $gapNo = 0;
+        $html = preg_replace_callback('/\{([0-9]*):([A-Za-z_]+):(.*?)\}/s', function($m) use (&$gapNo) {
+            $gapNo++;
+            $kind = strtoupper($m[2]);
+            $spec = $m[3];
+            // Chaque option : [%crédit%]=texte ou ~texte, suivie éventuellement de #commentaire
+            $options = [];
+            foreach (preg_split('/(?<!\\\\)~/', $spec) as $raw) {
+                if ($raw === '') continue;
+                $raw = preg_replace('/^%[-0-9.]+%/', '', $raw);
+                $correct = str_starts_with($raw, '=');
+                $raw = ltrim($raw, '=');
+                $raw = preg_split('/(?<!\\\\)#/', $raw)[0];
+                $label = str_replace(['\\~', '\\#', '\\}', '\\='], ['~', '#', '}', '='], trim($raw));
+                if ($label === '') continue;
+                $options[] = ['t' => $label, 'c' => $correct];
+            }
+            $correctText = '';
+            foreach ($options as $o) { if ($o['c']) { $correctText = $o['t']; break; } }
+
+            if (str_contains($kind, 'MULTICHOICE') || $kind === 'MC' || $kind === 'MCV' || $kind === 'MCH') {
+                shuffle($options);
+                $out = '<select class="form-input form-input-inline gap-select cloze-input" data-gap="' . $gapNo . '"'
+                     . ' data-correct="' . htmlspecialchars($correctText, ENT_QUOTES) . '">'
+                     . '<option value="">Choisir...</option>';
+                foreach ($options as $o) {
+                    $out .= '<option value="' . htmlspecialchars($o['t'], ENT_QUOTES) . '">' . htmlspecialchars($o['t']) . '</option>';
+                }
+                return $out . '</select>';
+            }
+            return '<input type="text" class="form-input form-input-inline cloze-input" autocomplete="off"'
+                 . ' data-gap="' . $gapNo . '"'
+                 . ' data-correct="' . htmlspecialchars($correctText, ENT_QUOTES) . '" size="14">';
+        }, $text);
+
+        return '<div class="answers-cloze gapselect-text">' . $this->processContent($html) . '</div>';
     }
     
     // ========== AUTRES ACTIVITÉS ==========
@@ -3964,30 +4283,141 @@ class CourseRenderer {
         return ob_get_clean();
     }
     
+    /**
+     * Dossier (module Moodle « folder ») : des fichiers mis à disposition des élèves,
+     * téléchargeables un par un ou tous d'un coup dans un ZIP.
+     * Deux origines possibles pour les fichiers :
+     *  - cours importé d'un .mbz → entrées `content_files` (hash + nom) ;
+     *  - cours fabriqué dans l'éditeur → entrées `files` ({fileUrl, fileName}).
+     */
     private function renderFolder(array $activity): string {
-        $files = array_filter($activity['files'] ?? [], fn($f) => $f['filename'] !== '.' && ($f['filearea'] ?? '') === 'content');
-        
+        $items = [];
+
+        foreach ($activity['content_files'] ?? [] as $f) {
+            if (($f['filename'] ?? '.') === '.' || empty($f['hash'])) continue;
+            $dl = $this->getDownloadUrl($f['hash'], (string)$f['filename']);
+            $items[] = [
+                'name' => (string)$f['filename'],
+                'url'  => $dl['url'],
+                'sameOrigin' => $dl['sameOrigin'],
+                'size' => (int)($f['filesize'] ?? 0),
+                'path' => trim((string)($f['filepath'] ?? '/'), '/'),
+            ];
+        }
+        // Rétrocompatibilité : anciens cours analysés avant l'ajout de content_files
+        if (empty($items)) {
+            foreach ($activity['files'] ?? [] as $f) {
+                if (($f['filearea'] ?? '') !== 'content' || ($f['filename'] ?? '.') === '.') continue;
+                $dl = $this->getDownloadUrl($f['hash'], (string)$f['filename']);
+                $items[] = [
+                    'name' => (string)$f['filename'],
+                    'url'  => $dl['url'],
+                    'sameOrigin' => $dl['sameOrigin'],
+                    'size' => (int)($f['filesize'] ?? 0),
+                    'path' => trim((string)($f['filepath'] ?? '/'), '/'),
+                ];
+            }
+        }
+        // Cours fabriqué dans l'éditeur
+        foreach ($activity['files'] ?? [] as $f) {
+            if (empty($f['fileUrl']) || empty($f['fileName'])) continue;
+            $items[] = [
+                'name' => (string)$f['fileName'],
+                'url'  => (string)$f['fileUrl'],
+                'sameOrigin' => true,
+                'size' => (int)($f['fileSize'] ?? 0),
+                'path' => '',
+            ];
+        }
+
+        $id = 'folder-' . ($activity['module_id'] ?? uniqid());
+        $showAll = ($activity['show_download_folder'] ?? true) && count($items) > 1;
+        $intro = $activity['intro'] ?? '';
+        $zipName = $this->sanitizeDownloadName($activity['name'] ?? 'dossier') . '.zip';
+
         ob_start();
         ?>
-        <div class="activity activity-folder">
+        <div class="activity activity-folder" id="<?= htmlspecialchars($id) ?>">
             <div class="activity-header">
                 <span class="activity-icon">📁</span>
                 <h3 class="activity-title"><?= htmlspecialchars($activity['name'] ?? 'Dossier') ?></h3>
             </div>
-            <?php if (!empty($files)): ?>
-            <ul class="folder-files" style="padding:1rem;list-style:none;">
-                <?php foreach ($files as $file): ?>
-                <li style="margin-bottom:0.5rem;">
-                    <a href="<?= $this->getFileUrl($file['hash']) ?>" target="_blank">
-                        📄 <?= htmlspecialchars($file['filename']) ?>
-                    </a>
-                </li>
-                <?php endforeach; ?>
-            </ul>
-            <?php endif; ?>
+            <div class="folder-body">
+                <?php if (!empty($intro)): ?>
+                <div class="folder-intro"><?= $this->processContent($intro) ?></div>
+                <?php endif; ?>
+
+                <?php if (empty($items)): ?>
+                <p class="folder-empty">Ce dossier ne contient aucun fichier.</p>
+                <?php else: ?>
+                <ul class="folder-files">
+                    <?php $currentPath = null; foreach ($items as $i => $item): ?>
+                        <?php if ($item['path'] !== '' && $item['path'] !== $currentPath): $currentPath = $item['path']; ?>
+                        <li class="folder-subfolder">📂 <?= htmlspecialchars($currentPath) ?></li>
+                        <?php endif; ?>
+                    <li class="folder-file<?= $item['path'] !== '' ? ' folder-file-nested' : '' ?>">
+                        <span class="folder-file-icon"><?= $this->fileEmoji($item['name']) ?></span>
+                        <a class="folder-file-name" href="<?= htmlspecialchars($item['url']) ?>"
+                           download="<?= htmlspecialchars($item['name']) ?>"><?= htmlspecialchars($item['name']) ?></a>
+                        <?php if ($item['size'] > 0): ?>
+                        <span class="folder-file-size"><?= $this->humanFileSize($item['size']) ?></span>
+                        <?php endif; ?>
+                        <a class="folder-file-btn" href="<?= htmlspecialchars($item['url']) ?>"
+                           download="<?= htmlspecialchars($item['name']) ?>" title="Télécharger">⬇️</a>
+                    </li>
+                    <?php endforeach; ?>
+                </ul>
+                <?php if ($showAll): ?>
+                <div class="folder-actions">
+                    <button type="button" class="btn btn-primary folder-download-all"
+                            onclick="folderDownloadAll('<?= htmlspecialchars($id, ENT_QUOTES) ?>', this)">
+                        ⬇️ Tout télécharger (<?= count($items) ?> fichiers)
+                    </button>
+                    <span class="folder-download-status"></span>
+                </div>
+                <?php endif; ?>
+                <?php endif; ?>
+            </div>
         </div>
+        <?php if (!empty($items)): ?>
+        <script>
+            window.folderData = window.folderData || {};
+            window.folderData['<?= $id ?>'] = <?= json_encode(['zipName' => $zipName, 'files' => $items], JSON_UNESCAPED_UNICODE) ?>;
+        </script>
+        <?php endif; ?>
         <?php
         return ob_get_clean();
+    }
+
+    /** Emoji d'après l'extension, pour repérer un fichier d'un coup d'œil. */
+    private function fileEmoji(string $filename): string {
+        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        $map = [
+            'pdf' => '📕',
+            'doc' => '📘', 'docx' => '📘', 'odt' => '📘', 'rtf' => '📘', 'txt' => '📄',
+            'xls' => '📗', 'xlsx' => '📗', 'ods' => '📗', 'csv' => '📗',
+            'ppt' => '📙', 'pptx' => '📙', 'odp' => '📙',
+            'jpg' => '🖼️', 'jpeg' => '🖼️', 'png' => '🖼️', 'gif' => '🖼️', 'webp' => '🖼️', 'svg' => '🖼️', 'bmp' => '🖼️',
+            'mp4' => '🎬', 'webm' => '🎬', 'mov' => '🎬', 'avi' => '🎬', 'mkv' => '🎬',
+            'mp3' => '🎵', 'wav' => '🎵', 'ogg' => '🎵', 'm4a' => '🎵',
+            'zip' => '🗜️', 'rar' => '🗜️', '7z' => '🗜️', 'gz' => '🗜️',
+            'hex' => '🤖', 'sb3' => '🐱', 'stl' => '🧊', 'sh3d' => '🏠', 'filius' => '🌐',
+        ];
+        return $map[$ext] ?? '📄';
+    }
+
+    /** Taille lisible (1,2 Mo). */
+    private function humanFileSize(int $bytes): string {
+        if ($bytes >= 1048576) return number_format($bytes / 1048576, 1, ',', ' ') . ' Mo';
+        if ($bytes >= 1024)    return number_format($bytes / 1024, 0, ',', ' ') . ' Ko';
+        return $bytes . ' o';
+    }
+
+    /** Nom de fichier sûr pour un téléchargement (archive du dossier). */
+    private function sanitizeDownloadName(string $name): string {
+        $name = preg_replace('/[^\p{L}\p{N} _.-]+/u', '', $name);
+        $name = trim(preg_replace('/\s+/', '-', $name), '-');
+        return $name !== '' ? $name : 'dossier';
     }
     
     private function renderLesson(array $activity): string {

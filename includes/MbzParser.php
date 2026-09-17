@@ -189,6 +189,8 @@ class MbzParser {
                 'filearea' => (string)$file->filearea,
                 'itemid' => (int)$file->itemid,
                 'contextid' => (int)$file->contextid,
+                // Ordre voulu par le professeur dans un dossier Moodle
+                'sortorder' => (int)$file->sortorder,
             ];
         }
     }
@@ -578,14 +580,34 @@ class MbzParser {
         
         $xml = simplexml_load_file($xmlPath);
         $folder = $xml->folder;
-        
+
+        // Même découpage que la ressource : `content_files` est ce que l'éditeur et le
+        // lecteur manipulent (les fichiers déposés pour les élèves), `files` garde tout
+        // le contexte, images de la description comprises.
+        $files = $this->getActivityFiles((int)$xml['contextid']);
+        $contentFiles = [];
+        foreach ($files as $file) {
+            if (($file['filearea'] ?? '') === 'content' && ($file['filename'] ?? '.') !== '.') {
+                $contentFiles[] = $file;
+            }
+        }
+        // Moodle range les fichiers d'un dossier par sortorder puis par nom.
+        usort($contentFiles, function ($a, $b) {
+            $sa = (int)($a['sortorder'] ?? 0);
+            $sb = (int)($b['sortorder'] ?? 0);
+            if ($sa !== $sb) return $sa <=> $sb;
+            return strnatcasecmp(($a['filepath'] ?? '/') . $a['filename'], ($b['filepath'] ?? '/') . $b['filename']);
+        });
+
         return [
             'type' => 'folder',
             'module_id' => $moduleId,
             'id' => (int)$folder['id'],
             'name' => $this->cleanText(((string)$folder->name ?: (string)$folder->n)),
             'intro' => $this->cleanHtml((string)$folder->intro),
-            'files' => $this->getActivityFiles((int)$xml['contextid']),
+            'show_download_folder' => isset($folder->showdownloadfolder) ? (int)$folder->showdownloadfolder === 1 : true,
+            'content_files' => $contentFiles,
+            'files' => $files,
         ];
     }
     
@@ -1037,15 +1059,21 @@ class MbzParser {
      * Nettoie le HTML
      */
     private function cleanHtml(?string $html): string {
-        if (empty($html) || $html === '$@NULL@$') return '';
+        // PIÈGE : empty() est VRAI pour la chaîne "0". Or « 0 » est un intitulé de
+        // réponse parfaitement courant (« la variable est réglée à 0 »). Avec empty(),
+        // cette réponse ressortait vide : la liste déroulante d'une « sélection de mots »
+        // affichait une ligne blanche impossible à distinguer du « Choisir... », et la
+        // bonne réponse devenait inatteignable. Tester explicitement la chaîne vide.
+        if ($html === null || $html === '' || $html === '$@NULL@$') return '';
         return html_entity_decode(trim($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
     }
-    
+
     /**
      * Nettoie le texte
      */
     private function cleanText(?string $text): string {
-        if (empty($text) || $text === '$@NULL@$') return '';
+        // Même piège que cleanHtml() : ne pas utiliser empty(), qui mange le "0".
+        if ($text === null || $text === '' || $text === '$@NULL@$') return '';
         return html_entity_decode(trim(strip_tags($text)), ENT_QUOTES | ENT_HTML5, 'UTF-8');
     }
     

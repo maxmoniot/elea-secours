@@ -641,6 +641,19 @@
 :root[data-theme="dark"] .cp-canvas .h5p-eta-input {
     border-color: #ccd3f0;
 }
+/* Exception : à la correction d'une évaluation, les champs justes/faux sont colorés
+   (assets/css/style.css → .quiz-ok / .quiz-ko). La règle générique ci-dessus, plus
+   spécifique qu'une simple classe, les repasserait tous en blanc. */
+:root[data-theme="dark"] .activity-wrapper .quiz-ok,
+:root[data-theme="dark"] .cp-canvas .quiz-ok {
+    background: rgb(16 185 129 / 0.16);
+    border-color: #10b981;
+}
+:root[data-theme="dark"] .activity-wrapper .quiz-ko,
+:root[data-theme="dark"] .cp-canvas .quiz-ko {
+    background: rgb(239 68 68 / 0.16);
+    border-color: #ef4444;
+}
 
 /* -----------------------------------------------------
    6 bis. EXCEPTION : le CHROME situé DANS un îlot

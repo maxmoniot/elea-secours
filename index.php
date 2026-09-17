@@ -811,10 +811,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'clear_all_cache' && $isAdmi
     $tempDeleted = 0;
     
     // Nettoyer TOUT le dossier TMP_PATH (cours extraits, cache JSON, MBZ temp)
+    // On garde le .htaccess : c'est lui qui empêche l'exécution d'un fichier déposé
+    // (le vidage du cache ne doit pas désarmer la protection au passage).
     if (is_dir(TMP_PATH)) {
         $items = scandir(TMP_PATH);
         foreach ($items as $item) {
-            if ($item === '.' || $item === '..') continue;
+            if ($item === '.' || $item === '..' || $item === '.htaccess') continue;
             $itemPath = TMP_PATH . '/' . $item;
             if (is_dir($itemPath)) {
                 rrmdir($itemPath);
@@ -1003,7 +1005,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'clear_temp_drive_indexes' &
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="assets/css/style.css?v=<?= @filemtime(__DIR__ . "/assets/css/style.css") ?>">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🆘</text></svg>">
     <?php include __DIR__ . '/includes/theme_assets.php'; ?>
     <style>

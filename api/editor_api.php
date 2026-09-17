@@ -575,7 +575,7 @@ function loadAutoDraft($input, $draftsDir) {
                         }
                         
                         // Nettoyer h5pType pour les types non-H5P
-                        if (in_array($activity['type'] ?? '', ['assign', 'resource', 'mapmodules', 'quiz'])) {
+                        if (in_array($activity['type'] ?? '', ['assign', 'resource', 'folder', 'mapmodules', 'quiz'])) {
                             $activity['h5pType'] = '';
                         }
                     }
@@ -759,8 +759,12 @@ function exportElea($input) {
     
     // Écrire un log de progression dans un fichier (survit aux crashs)
     $logFile = TMP_PATH . '/.export_progress.log';
-    $logProgress = function($msg) use ($logFile) {
-        $line = date('H:i:s') . ' ' . round(memory_get_usage(true)/(1024*1024),1) . 'Mo ' . $msg . "\n";
+    // Identifiant court de la requête : le journal est partagé, et deux exports lancés
+    // coup sur coup y mélangeaient leurs lignes (on lisait les étapes de l'un en croyant
+    // lire celles de l'autre, avec des durées incohérentes à la clé).
+    $trace = bin2hex(random_bytes(2));
+    $logProgress = function($msg) use ($logFile, $trace) {
+        $line = date('H:i:s') . ' [' . $trace . '] ' . round(memory_get_usage(true)/(1024*1024),1) . 'Mo ' . $msg . "\n";
         @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
     };
     @file_put_contents($logFile, "=== Export " . date('H:i:s') . " ===\n"); // Reset avec timestamp
@@ -776,13 +780,9 @@ function exportElea($input) {
         $error = error_get_last();
         if ($error && in_array($error['type'], [E_ERROR, E_CORE_ERROR, E_COMPILE_ERROR, E_PARSE])) {
             $logProgress('FATAL: ' . $error['message'] . ' in ' . $error['file'] . ':' . $error['line']);
-            // Nettoyer drive_downloads en cas de crash
-            $dlDir = TMP_PATH . '/drive_downloads';
-            if (is_dir($dlDir)) {
-                foreach (glob($dlDir . '/*') as $f) {
-                    if (is_file($f)) @unlink($f);
-                }
-            }
+            // Le cache drive_downloads est CONSERVÉ : c'est lui qui permet à la
+            // tentative suivante de repartir de ce qui a déjà été téléchargé.
+            // Il se purge tout seul au bout d'une heure (cleanDriveDownloads).
         }
     });
     
@@ -808,6 +808,7 @@ function exportElea($input) {
         $logProgress('Creating exporter, sessionId=' . $sessionId);
         $t0 = microtime(true);
         $exporter = new EleaMbzExporter($data, $sessionId);
+        $exporter->setTraceId($trace);
         // Barre de progression de l'éditeur : l'exporteur publie son avancement, le
         // navigateur l'interroge en parallèle via l'action get_progress.
         $progressId = $input['progressId'] ?? '';
@@ -823,15 +824,8 @@ function exportElea($input) {
         $t2 = microtime(true);
         $logProgress('Export done in ' . round(($t2-$t1)*1000) . 'ms, mbz=' . basename($mbzPath));
         
-        // Nettoyer drive_downloads après l'export pour libérer l'espace
-        $dlDir = TMP_PATH . '/drive_downloads';
-        if (is_dir($dlDir)) {
-            foreach (glob($dlDir . '/*') as $f) {
-                if (is_file($f)) @unlink($f);
-            }
-            $logProgress('drive_downloads nettoyé');
-        }
-        
+        // Le cache drive_downloads reste en place (purge à 1 h) : le vider ici
+        // obligeait chaque nouvelle tentative à retélécharger tout le cours.
         $filename = basename($mbzPath);
         $downloadUrl = SITE_URL . '/download.php?file=' . urlencode($filename);
         $mbzSize = file_exists($mbzPath) ? filesize($mbzPath) : 0;
@@ -863,13 +857,7 @@ function exportElea($input) {
     } catch (\Throwable $e) {
         $logProgress('ERROR: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
         if (!empty($progressId)) progressClear($progressId);
-        // Nettoyer drive_downloads même en cas d'erreur
-        $dlDir = TMP_PATH . '/drive_downloads';
-        if (is_dir($dlDir)) {
-            foreach (glob($dlDir . '/*') as $f) {
-                if (is_file($f)) @unlink($f);
-            }
-        }
+        // Cache drive_downloads conservé : la tentative suivante en profitera.
         echo json_encode(['error' => 'Erreur d\'export Éléa: ' . $e->getMessage()]);
     }
 }
@@ -1293,7 +1281,9 @@ function parseMbz() {
                 }
 
                 // Ressource (fichiers à distribuer)
-                if ($actType === 'resource') {
+                // Le « Dossier » (module folder) suit le meme chemin que la ressource :
+                // une liste de fichiers deposes pour les eleves.
+                if ($actType === 'resource' || $actType === 'folder') {
                     $contentFiles = $activity['content_files'] ?? [];
                     $files = [];
                     
@@ -1331,8 +1321,8 @@ function parseMbz() {
                     
                     $editorSection['activities'][] = [
                         'id' => 'import_' . ($activity['module_id'] ?? $activity['id'] ?? uniqid()),
-                        'type' => 'resource',
-                        'name' => $activity['name'] ?? 'Fichiers à distribuer',
+                        'type' => $actType,
+                        'name' => $activity['name'] ?? ($actType === 'folder' ? 'Dossier' : 'Fichiers à distribuer'),
                         'files' => $files,
                         'intro' => $intro,
                     ];
@@ -1946,28 +1936,27 @@ function copyImageToUploads() {
  * Retourne la taille totale des fichiers de la session éditeur
  * Beaucoup plus fiable que le scan JS côté client
  */
-function getSessionFilesTotal($input) {
-    global $editorSessionId;
-    $sessionId = $input['sessionId'] ?? $editorSessionId ?? '';
+/**
+ * Place occupée par un cours en création : octets et nombre de fichiers.
+ * Compte les fichiers encore sur le serveur ET ceux déjà basculés sur Drive (leur taille
+ * est conservée dans les métadonnées de session).
+ *
+ * @return array{bytes:int,files:int,drive:int}
+ */
+function editorSessionUsage(string $sessionId): array {
+    $safeSessionId = preg_replace('/[^a-zA-Z0-9_-]/', '', $sessionId);
+    if (!$safeSessionId) return ['bytes' => 0, 'files' => 0, 'drive' => 0];
 
     $totalBytes = 0;
     $fileCount = 0;
-
-    if (!$sessionId) {
-        echo json_encode(['success' => true, 'total_bytes' => 0, 'file_count' => 0]);
-        return;
-    }
-
-    $safeSessionId = preg_replace('/[^a-zA-Z0-9_-]/', '', $sessionId);
+    $localFilenames = [];
 
     // 1) Fichiers encore présents localement dans le dossier session
-    $localFilenames = [];
     $sessionDir = CACHE_DIR . '/editor_uploads/' . $safeSessionId;
     if (is_dir($sessionDir)) {
         foreach (glob($sessionDir . '/*') as $fp) {
             if (is_file($fp)) {
-                $fn = basename($fp);
-                $localFilenames[$fn] = true;
+                $localFilenames[basename($fp)] = true;
                 $totalBytes += filesize($fp);
                 $fileCount++;
             }
@@ -1997,9 +1986,9 @@ function getSessionFilesTotal($input) {
         $fileSizes   = $meta['file_sizes']   ?? [];
         $driveCount  = count($fileMapping);
 
-        $knownDriveBytes    = 0;
-        $knownDriveFiles    = 0;
-        $unknownDriveFiles  = 0;
+        $knownDriveBytes   = 0;
+        $knownDriveFiles   = 0;
+        $unknownDriveFiles = 0;
 
         foreach ($fileMapping as $fn => $driveId) {
             if (isset($localFilenames[$fn])) continue; // déjà compté localement
@@ -2026,11 +2015,92 @@ function getSessionFilesTotal($input) {
         }
     }
 
+    // Nombre de fichiers du cours = ceux restés ici + ceux déjà partis sur Drive
+    $driveSeuls = 0;
+    foreach (($meta['file_mapping'] ?? []) as $fn => $driveId) {
+        if (!isset($localFilenames[$fn])) $driveSeuls++;
+    }
+
+    return ['bytes' => $totalBytes, 'files' => $fileCount + $driveSeuls, 'drive' => $driveCount];
+}
+
+/**
+ * Garde-fou commun à TOUS les dépôts de fichiers de l'éditeur.
+ *
+ * Le site est public et le code professeur circule : sans plafond côté serveur, un seul
+ * compte pouvait saturer l'hébergement mutualisé, avec un gros fichier comme avec des
+ * milliers de petits. Le contrôle affiché dans l'éditeur n'était qu'en JavaScript.
+ *
+ * @param array  $file   entrée de $_FILES
+ * @param string $sessionId session de l'éditeur
+ * @param bool   $piece  true = pièce jointe (tout type), false = média (image/son/vidéo)
+ * @return string|null message d'erreur, ou null si le dépôt est autorisé
+ */
+function refusUpload(array $file, string $sessionId, bool $piece): ?string {
+    $taille = (int)($file['size'] ?? 0);
+    $maxFichier = $piece ? MAX_ATTACHMENT_SIZE : MAX_MEDIA_SIZE;
+
+    if ($taille > $maxFichier) {
+        return 'Fichier trop volumineux (' . round($taille / 1048576, 1) . ' Mo). '
+             . 'Maximum : ' . round($maxFichier / 1048576) . ' Mo par fichier.';
+    }
+
+    // Extension : deuxième barrière derrière le .htaccess des dossiers de données.
+    $ext = strtolower(pathinfo((string)($file['name'] ?? ''), PATHINFO_EXTENSION));
+    if ($ext !== '' && in_array($ext, FORBIDDEN_UPLOAD_EXTENSIONS, true)) {
+        return 'Type de fichier refusé (.' . $ext . ') : les programmes et les scripts ne '
+             . 'peuvent pas être déposés.';
+    }
+
+    // Plafond du cours en création (celui qu'affiche l'éditeur).
+    $usage = editorSessionUsage($sessionId);
+    if ($usage['bytes'] + $taille > MAX_COURSE_BYTES) {
+        return 'Ce cours atteint la limite de ' . round(MAX_COURSE_BYTES / 1048576) . ' Mo ('
+             . round($usage['bytes'] / 1048576, 1) . ' Mo déjà utilisés). '
+             . 'Supprimez des fichiers ou exportez le cours avant d\'en ajouter.';
+    }
+    if ($usage['files'] + 1 > MAX_COURSE_FILES) {
+        return 'Ce cours atteint la limite de ' . MAX_COURSE_FILES . ' fichiers.';
+    }
+
+    // Plafond global du serveur (400 Mo) : partagé avec les cours déposés et le cache.
+    // getServerTotalUsage() parcourt récursivement courses/, tmp/ et cache/ : on garde
+    // le résultat 5 secondes, sinon un envoi de 20 images d'un coup déclenche 20 parcours
+    // complets en parallèle sur un hébergement mutualisé. Le plafond du cours (calculé
+    // juste au-dessus sur le seul dossier de la session) reste, lui, toujours exact.
+    $occupe = serveurOccupeMemo();
+    if ($occupe + $taille > SERVER_MAX_MB * 1024 * 1024) {
+        return 'Espace serveur insuffisant (' . round($occupe / 1048576)
+             . ' Mo / ' . SERVER_MAX_MB . ' Mo). Libérez de l\'espace avant d\'ajouter un fichier.';
+    }
+
+    return null;
+}
+
+/** Espace serveur occupé, recalculé au plus une fois toutes les 5 secondes. */
+function serveurOccupeMemo(): int {
+    static $memo = null;
+    if ($memo !== null) return $memo;
+
+    $cache = CACHE_DIR . '/server_usage.json';
+    if (is_file($cache) && (time() - filemtime($cache)) < 5) {
+        $lu = json_decode((string)@file_get_contents($cache), true);
+        if (isset($lu['bytes'])) return $memo = (int)$lu['bytes'];
+    }
+    $memo = getServerTotalUsage();
+    @file_put_contents($cache, json_encode(['bytes' => $memo, 'at' => time()]), LOCK_EX);
+    return $memo;
+}
+
+function getSessionFilesTotal($input) {
+    global $editorSessionId;
+    $sessionId = $input['sessionId'] ?? $editorSessionId ?? '';
+    $usage = editorSessionUsage((string)$sessionId);
     echo json_encode([
         'success'     => true,
-        'total_bytes' => $totalBytes,
-        'file_count'  => $fileCount,
-        'drive_count' => $driveCount,
+        'total_bytes' => $usage['bytes'],
+        'file_count'  => $usage['files'],
+        'drive_count' => $usage['drive'],
     ]);
 }
 
@@ -2421,6 +2491,13 @@ function uploadFile() {
             echo json_encode(['error' => 'Session éditeur manquante. Rechargez la page.']);
             return;
         }
+        // Garde-fous : taille du fichier, place du cours, place du serveur.
+        $refus = refusUpload($file, $safeSessionId, false);
+        if ($refus !== null) {
+            echo json_encode(['error' => $refus]);
+            return;
+        }
+
         $uploadDir = CACHE_DIR . '/editor_uploads/' . $safeSessionId;
         if (!is_dir($uploadDir)) {
             if (!@mkdir($uploadDir, 0755, true)) {
@@ -2497,18 +2574,20 @@ function uploadAssignFile() {
             return;
         }
         
-        // Limite de taille : 50 Mo
-        if ($file['size'] > 50 * 1024 * 1024) {
-            echo json_encode(['error' => 'Fichier trop volumineux (max 50 Mo)']);
-            return;
-        }
-        
         $sessionId = $_POST['session_id'] ?? '';
         $safeSessionId = preg_replace('/[^a-zA-Z0-9_-]/', '', $sessionId);
         if (!$safeSessionId) {
             echo json_encode(['error' => 'Session éditeur manquante. Rechargez la page.']);
             return;
         }
+
+        // Garde-fous : taille du fichier, type, place du cours, place du serveur.
+        $refus = refusUpload($file, $safeSessionId, true);
+        if ($refus !== null) {
+            echo json_encode(['error' => $refus]);
+            return;
+        }
+
         $uploadDir = CACHE_DIR . '/editor_uploads/' . $safeSessionId;
         if (!is_dir($uploadDir)) {
             mkdir($uploadDir, 0755, true);
@@ -5902,7 +5981,9 @@ function parseDriveMbz($input) {
                 }
                 
                 // Ressource (fichiers à distribuer)
-                if ($actType === 'resource') {
+                // Le « Dossier » (module folder) suit le meme chemin que la ressource :
+                // une liste de fichiers deposes pour les eleves.
+                if ($actType === 'resource' || $actType === 'folder') {
                     $contentFiles = $activity['content_files'] ?? [];
                     $files = [];
                     
@@ -5939,8 +6020,8 @@ function parseDriveMbz($input) {
                     
                     $editorSection['activities'][] = [
                         'id' => 'import_' . ($activity['module_id'] ?? $activity['id'] ?? uniqid()),
-                        'type' => 'resource',
-                        'name' => $activity['name'] ?? 'Fichiers à distribuer',
+                        'type' => $actType,
+                        'name' => $activity['name'] ?? ($actType === 'folder' ? 'Dossier' : 'Fichiers à distribuer'),
                         'files' => $files,
                         'intro' => $intro,
                     ];
@@ -6260,7 +6341,9 @@ function parseLocalCourse($input) {
                 }
                 
                 // Ressource (fichiers à distribuer)
-                if ($actType === 'resource') {
+                // Le « Dossier » (module folder) suit le meme chemin que la ressource :
+                // une liste de fichiers deposes pour les eleves.
+                if ($actType === 'resource' || $actType === 'folder') {
                     $contentFiles = $activity['content_files'] ?? [];
                     $files = [];
                     foreach ($contentFiles as $cf) {
@@ -6292,8 +6375,8 @@ function parseLocalCourse($input) {
                     }
                     $editorSection['activities'][] = [
                         'id' => 'import_' . ($activity['module_id'] ?? $activity['id'] ?? uniqid()),
-                        'type' => 'resource',
-                        'name' => $activity['name'] ?? 'Fichiers à distribuer',
+                        'type' => $actType,
+                        'name' => $activity['name'] ?? ($actType === 'folder' ? 'Dossier' : 'Fichiers à distribuer'),
                         'files' => $files,
                         'intro' => $intro,
                     ];

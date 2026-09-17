@@ -7,6 +7,9 @@
  */
 
 class EleaMbzExporter {
+    /** Secondes accordées à la récupération des médias (le serveur coupe vers 165 s). */
+    private const BUDGET_TELECHARGEMENT = 110;
+
     private $data;
     private $exportDir;
     private $filesDir;
@@ -49,6 +52,8 @@ class EleaMbzExporter {
     private $htmlDirEntryDone = [];   // zones ayant déjà leur entrée de dossier « . »
     private $unresolvedFiles = []; // Fichiers référencés introuvables partout (nom => true) — signalés au prof
     private $progressCb = null;      // Callback d'avancement (barre de progression du navigateur)
+    private $traceId = '';           // marque les lignes du journal partagé (exports concurrents)
+    private $debutExport = 0.0;      // pour tenir dans la limite de temps du serveur
     
     public function __construct($data, string $sessionId = '') {
         $this->data = $data;
@@ -67,6 +72,18 @@ class EleaMbzExporter {
      * CORRECTION: Recherche un fichier dans plusieurs emplacements possibles
      * Résout le problème des chemins relatifs vs absolus
      */
+    /** Identifiant court de la requête, repris dans chaque ligne du journal d'export. */
+    public function setTraceId(string $id): void {
+        $this->traceId = $id;
+    }
+
+    /** Une ligne dans le journal d'export partagé, préfixée par l'identifiant de requête. */
+    private function logProgres(string $msg): void {
+        @file_put_contents(TMP_PATH . '/.export_progress.log',
+            date('H:i:s') . ' [' . ($this->traceId ?: '----') . '] ' . $msg . "\n",
+            FILE_APPEND | LOCK_EX);
+    }
+
     public function getFilesManifest(): array {
         return $this->filesManifest;
     }
@@ -225,12 +242,12 @@ class EleaMbzExporter {
     
     
     public function export() {
-        $progressLog = TMP_PATH . '/.export_progress.log';
-        $logP = function($msg) use ($progressLog) {
-            @file_put_contents($progressLog, date('H:i:s') . ' ' . round(memory_get_usage(true)/(1024*1024),1) . 'Mo ' . $msg . "\n", FILE_APPEND | LOCK_EX);
+        $logP = function($msg) {
+            $this->logProgres(round(memory_get_usage(true) / (1024 * 1024), 1) . 'Mo ' . $msg);
         };
         
         $logP('export() start');
+        $this->debutExport = microtime(true);
         $this->progress(2, 'Préparation de l\'export…');
 
         // Écarter les activités qu'on ne sait pas exporter, AVANT toute génération : les
@@ -296,7 +313,7 @@ class EleaMbzExporter {
         $dropped = [];
         // Modules Moodle que l'exporteur sait écrire tels quels
         $handled = ['mapmodules' => 1, 'assign' => 1, 'resource' => 1, 'quiz' => 1,
-                    'label' => 1, 'page' => 1];
+                    'label' => 1, 'page' => 1, 'folder' => 1];
         // Types qui SONT du H5P : eux seuls ont le droit de partir en activité hvp.
         // Sans ce filtre, un module Moodle inconnu (qbank, url, forum…) sortait en
         // « H5P.qbank », « H5P.url »… : une bibliothèque qui n'existe pas, donc une
@@ -342,6 +359,7 @@ class EleaMbzExporter {
         
         // Collecter tous les driveIds depuis les URLs lh3
         $driveIds = [];
+        $fichierParDriveId = [];   // identifiant Drive => nom du média dans la session
         if (preg_match_all('#lh3\.googleusercontent\.com/d/([a-zA-Z0-9_-]+)#', $json, $m)) {
             foreach ($m[1] as $id) $driveIds[$id] = true;
         }
@@ -383,6 +401,7 @@ class EleaMbzExporter {
                 foreach ($jsonUploadFiles as $fn) {
                     if (isset($mapping[$fn])) {
                         $driveIds[$mapping[$fn]] = true;
+                        $fichierParDriveId[$mapping[$fn]] = $fn;
                         $found++;
                     }
                 }
@@ -393,22 +412,19 @@ class EleaMbzExporter {
         if (empty($driveIds)) return;
         
         $tmpDir = TMP_PATH . '/drive_downloads';
-        
-        // Nettoyer le cache drive_downloads pour repartir à zéro
-        if (is_dir($tmpDir)) {
-            foreach (glob($tmpDir . '/*') as $f) {
-                if (is_file($f)) @unlink($f);
-            }
-        } else {
-            @mkdir($tmpDir, 0755, true);
-        }
-        
-        // Télécharger tous les fichiers Drive référencés.
-        // AVEC LE JETON OAUTH (api Drive alt=media), pas via lh3.googleusercontent.com :
-        // cette URL publique ne sert que des IMAGES et seulement si le fichier est public.
-        // Nos fichiers sont privés → elle renvoyait une page HTML ou une erreur pour une
-        // grande partie du lot (constaté le 07/08/2026 : 184 fichiers récupérés sur 288),
-        // et tous les médias manquants sortaient absents du .mbz.
+        if (!is_dir($tmpDir)) @mkdir($tmpDir, 0755, true);
+
+        // Le cache des téléchargements est CONSERVÉ d'un export à l'autre (purge à 1 h
+        // par cleanDriveDownloads()). Avant, il était vidé au début de chaque export :
+        // un export interrompu par la limite de temps du serveur repartait de zéro,
+        // donc échouait indéfiniment sur les gros cours. Un fichier Drive de l'éditeur
+        // ne change jamais de contenu à identifiant constant : le réutiliser est sûr.
+        if (function_exists('cleanDriveDownloads')) cleanDriveDownloads();
+
+        // Jeton d'accès : les médias sont PRIVÉS sur le Drive. Sans en-tête
+        // d'authentification, Google répond 404 — c'est ce qui bloquait les exports
+        // (177 médias sur 276 en « html 404 » le 27/08/2026, tout le budget de temps
+        // consommé pour rien).
         $accessToken = null;
         try {
             require_once ROOT_PATH . '/DriveManager.php';
@@ -423,81 +439,67 @@ class EleaMbzExporter {
         }
 
         $toDownload = [];
+        $dejaEnCache = 0;
+        $dejaEnLocal = 0;
         foreach (array_keys($driveIds) as $driveId) {
-            $toDownload[$driveId] = $accessToken
-                ? 'https://www.googleapis.com/drive/v3/files/' . $driveId . '?alt=media&supportsAllDrives=true'
-                : 'https://lh3.googleusercontent.com/d/' . $driveId;
+            if ($this->cacheDriveValide($tmpDir . '/' . $driveId . '_prefetch.bin')) {
+                $dejaEnCache++;
+                continue;
+            }
+            // Média encore posé dans une session de l'éditeur : inutile de le redemander
+            // au Drive, findFileMultiPath le trouvera sur le disque.
+            if (isset($fichierParDriveId[$driveId])
+                && $this->fichierSessionExiste($fichierParDriveId[$driveId], $sessionsToCheck)) {
+                $dejaEnLocal++;
+                continue;
+            }
+            $toDownload[$driveId] = 'https://www.googleapis.com/drive/v3/files/'
+                . rawurlencode($driveId) . '?alt=media&supportsAllDrives=true';
         }
-        $enteteAuth = $accessToken ? ['Authorization: Bearer ' . $accessToken] : [];
+        $enteteAuth = ['Authorization: Bearer ' . (string)$accessToken];
 
-        if (empty($toDownload)) return;
-        
-        error_log("EleaMbzExporter: prefetch " . count($toDownload) . " fichiers Drive (curl_multi)");
-        
-        // Progress log
-        $progressLog = TMP_PATH . '/.export_progress.log';
-        @file_put_contents($progressLog, date('H:i:s') . " prefetch: " . count($toDownload) . " fichiers à télécharger\n", FILE_APPEND | LOCK_EX);
-        
-        // Téléchargement parallèle par lots de 20
-        $batchSize = 20;
-        $batches = array_chunk($toDownload, $batchSize, true);
-        $downloaded = 0;
-        $batchNum = 0;
-        
-        foreach ($batches as $batch) {
-            $batchNum++;
-            @file_put_contents($progressLog, date('H:i:s') . " batch $batchNum/" . count($batches) . " (" . count($batch) . " fichiers)\n", FILE_APPEND | LOCK_EX);
-            $mh = curl_multi_init();
-            $handles = [];
-            
-            foreach ($batch as $driveId => $url) {
-                $ch = curl_init($url);
-                curl_setopt_array($ch, [
-                    CURLOPT_RETURNTRANSFER => true,
-                    CURLOPT_FOLLOWLOCATION => true,
-                    CURLOPT_TIMEOUT => 30,
-                    CURLOPT_SSL_VERIFYPEER => false,
-                    CURLOPT_USERAGENT => 'Mozilla/5.0',
-                    CURLOPT_HTTPHEADER => $enteteAuth,
-                ]);
-                curl_multi_add_handle($mh, $ch);
-                $handles[$driveId] = $ch;
-            }
-            
-            do {
-                $status = curl_multi_exec($mh, $active);
-                if ($active) {
-                    curl_multi_select($mh, 1);
-                }
-            } while ($active && $status === CURLM_OK);
-            
-            foreach ($handles as $driveId => $ch) {
-                $data = curl_multi_getcontent($ch);
-                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                curl_multi_remove_handle($mh, $ch);
-                
-                // Rejeter les pages HTML d'erreur Google (fichier privé → lh3 renvoie parfois
-                // du HTML en 200) : les mettre en cache ferait embarquer du HTML à la place
-                // du média dans le .mbz. Le téléchargement OAuth par fichier prendra le relais.
-                $debut = ltrim(substr($data ?: '', 0, 64));
-                $estHtml = (stripos($debut, '<!doctype') === 0 || stripos($debut, '<html') === 0);
-                if ($data && strlen($data) > 100 && $httpCode >= 200 && $httpCode < 400 && !$estHtml) {
-                    $cachePath = $tmpDir . '/' . $driveId . '_prefetch.bin';
-                    file_put_contents($cachePath, $data);
-                    $downloaded++;
-                }
-            }
-            
-            curl_multi_close($mh);
-            @file_put_contents($progressLog, date('H:i:s') . " batch $batchNum done, total downloaded: $downloaded\n", FILE_APPEND | LOCK_EX);
+        // Pas de jeton : inutile de lancer le téléchargement parallèle, il ne
+        // ramènerait que les rares médias publics et mangerait le temps qui manquera
+        // ensuite à la récupération un par un (celle-ci, elle, s'authentifie).
+        if (!$accessToken) {
+            $this->logExport('[prefetch] AUCUN JETON Drive : téléchargement parallèle sauté, '
+                . 'récupération un par un pour ' . count($toDownload) . ' médias');
+            $this->logProgres('AUCUN JETON Drive, bascule en recuperation un par un');
         }
-        
-        // Rattrapage : tout ce que le lot parallèle n'a pas ramené est retenté un par un
-        // en OAuth. C'est lent mais ça ne concerne que les échecs, et un média manquant
-        // ici = un média absent du .mbz livré au professeur.
-        $rattrapes = 0; $echecs = [];
-        foreach (array_keys($toDownload) as $driveId) {
-            if (file_exists($tmpDir . '/' . $driveId . '_prefetch.bin')) continue;
+
+        $this->logExport('[prefetch] ' . count($driveIds) . ' fichiers Drive référencés : '
+            . $dejaEnCache . ' déjà en cache, ' . $dejaEnLocal . ' encore en local, '
+            . count($toDownload) . ' à télécharger');
+
+        if (empty($toDownload)) {
+            $this->logProgres("prefetch: rien a telecharger ($dejaEnCache en cache, $dejaEnLocal en local)");
+            return;
+        }
+
+        error_log('EleaMbzExporter: prefetch ' . count($toDownload) . ' fichiers Drive (curl_multi)');
+        $this->logProgres('prefetch: ' . count($toDownload) . ' fichiers a telecharger');
+
+        $bilan = $accessToken
+            ? $this->telechargerDriveEnParallele($toDownload, $enteteAuth, $tmpDir)
+            : ['ok' => 0, 'restant' => $toDownload, 'journal' => []];
+        $downloaded = $bilan['ok'];
+        $restant = $bilan['restant'];
+
+        // Dernier recours, un par un : lent, mais ça ne concerne plus qu'une poignée de
+        // fichiers (avant, c'était les deux tiers du lot — d'où des exports de 150 s qui
+        // heurtaient la limite de temps du serveur).
+        $rattrapes = 0;
+        $echecs = [];
+        $aCourtDeTemps = [];
+        foreach (array_keys($restant) as $driveId) {
+            // Le serveur mutualisé coupe la requête vers 165 s. Plutôt que de se faire
+            // tuer en plein travail (page « 500 » illisible pour le professeur), on
+            // s'arrête avant et on le dit — ce qui est déjà téléchargé reste en cache,
+            // donc la tentative suivante reprend là où celle-ci s'est arrêtée.
+            if ($this->tempsEcoule() > self::BUDGET_TELECHARGEMENT) {
+                $aCourtDeTemps[] = $driveId;
+                continue;
+            }
             $contenu = null;
             try {
                 if ($this->_driveManager) $contenu = $this->_driveManager->getFileContentById($driveId);
@@ -512,13 +514,248 @@ class EleaMbzExporter {
             }
         }
 
-        error_log("EleaMbzExporter: prefetch terminé, $downloaded/" . count($toDownload) . " fichiers");
-        $this->logExport("[prefetch] Downloaded $downloaded/" . count($toDownload) . " fichiers Drive"
-            . ($rattrapes ? " (dont $rattrapes rattrapés en OAuth)" : '')
-            . ($echecs ? " — ÉCHECS: " . implode(', ', array_slice($echecs, 0, 10)) : ''));
+        foreach ($bilan['journal'] as $ligne) $this->logExport('[prefetch] ' . $ligne);
+        error_log("EleaMbzExporter: prefetch termine, $downloaded/" . count($toDownload) . ' fichiers');
+        $this->logExport("[prefetch] Downloaded $downloaded/" . count($toDownload) . ' fichiers Drive'
+            . ($rattrapes ? " (dont $rattrapes rattrapés un par un)" : '')
+            . ($echecs ? ' — ÉCHECS: ' . implode(', ', array_slice($echecs, 0, 10)) : ''));
         if ($echecs) {
-            error_log("EleaMbzExporter: " . count($echecs) . " fichiers Drive NON téléchargés : " . implode(', ', array_slice($echecs, 0, 20)));
+            error_log('EleaMbzExporter: ' . count($echecs) . ' fichiers Drive NON telecharges : '
+                . implode(', ', array_slice($echecs, 0, 20)));
         }
+
+        if (!empty($aCourtDeTemps)) {
+            $enCache = count($driveIds) - count($aCourtDeTemps);
+            $this->logProgres('ARRET: temps ecoule, ' . count($aCourtDeTemps) . ' medias restants');
+            throw new \RuntimeException(
+                'la récupération des médias a dépassé le temps autorisé par le serveur. '
+                . $enCache . ' médias sur ' . count($driveIds) . ' sont déjà récupérés et '
+                . 'conservés : relancez l\'export, il reprendra là où il s\'est arrêté.');
+        }
+    }
+
+    /** Secondes écoulées depuis le début de l'export. */
+    private function tempsEcoule(): float {
+        return $this->debutExport > 0 ? microtime(true) - $this->debutExport : 0.0;
+    }
+
+    /** Un fichier du cache de téléchargement est utilisable s'il a du contenu. */
+    private function cacheDriveValide(string $chemin): bool {
+        return is_file($chemin) && filesize($chemin) > 100;
+    }
+
+    /**
+     * Le média est-il encore posé sur le disque, dans une des sessions de l'éditeur ?
+     * (Vérification volontairement directe : pas la recherche exhaustive de
+     * findFileMultiPath, qui balaie tous les dossiers.)
+     */
+    private function fichierSessionExiste(string $nom, array $sessions): bool {
+        $base = CACHE_DIR . '/editor_uploads/';
+        foreach ($sessions as $sid) {
+            if ($sid !== '' && is_file($base . $sid . '/' . $nom)) return true;
+        }
+        return is_file($base . $nom);
+    }
+
+    /**
+     * Télécharge des fichiers Drive en parallèle, par tours successifs.
+     *
+     * L'API Drive refuse une partie d'une rafale : sur 272 fichiers, un seul passage
+     * n'en ramenait qu'une centaine et tout le reste partait en téléchargements un par
+     * un — plus de deux minutes, au-delà de la limite de temps du serveur mutualisé.
+     * On retente donc les échecs EN PARALLÈLE, avec une pause croissante et moins de
+     * requêtes simultanées à chaque tour.
+     *
+     * @return array{ok:int, restant:array, journal:array}
+     */
+    private function telechargerDriveEnParallele(array $toDownload, array $entetes, string $tmpDir,
+                                                 int $concurrence = 12, int $tours = 4): array {
+        $restant = $toDownload;
+        $ok = 0;
+        $journal = [];
+        $steriles = 0;   // tours consécutifs sans aucun fichier rapporté
+
+        for ($tour = 1; $tour <= $tours && !empty($restant); $tour++) {
+            if ($tour > 1) {
+                // Pause croissante : 0,5 s puis 1 s puis 2 s — ce que Google attend d'un
+                // client qui vient de se faire refuser une rafale.
+                usleep(min(500000 * (1 << ($tour - 2)), 2000000));
+            }
+            // Moins de requêtes simultanées à chaque tour : insister au même rythme
+            // après un refus ne sert à rien.
+            $conc = max(3, (int)ceil($concurrence / $tour));
+
+            $bilan = $this->fenetreCurl($restant, $entetes, $tmpDir, $conc);
+            $ok += $bilan['ok'];
+            $restant = $bilan['echecs'];
+
+            $detail = [];
+            foreach ($bilan['codes'] as $cle => $n) $detail[] = $n . 'x ' . $cle;
+            $ligne = 'tour ' . $tour . ' (x' . $conc . ') : +' . $bilan['ok'] . ' obtenus, '
+                . $ok . ' au total, ' . count($restant) . ' a retenter'
+                . ($detail ? ' (' . implode(', ', $detail) . ')' : '');
+            $journal[] = $ligne;
+            $this->logProgres($ligne);
+
+            // Deux tours de suite sans rien rapporter : la cause n'est pas passagère,
+            // s'acharner ne fait que manger le temps qui manquera ensuite au
+            // rattrapage un par un (26 s perdues ainsi le 26/08/2026, sur 165 s).
+            $steriles = ($bilan['ok'] === 0) ? $steriles + 1 : 0;
+            if ($steriles >= 2) break;
+
+            // Un refus d'accès (404 / page HTML) ne se répare pas en réessayant :
+            // c'est l'authentification qui manque. On rend la main tout de suite au
+            // rattrapage un par un, qui, lui, s'authentifie.
+            if (count($restant) >= 10 && $this->refusDAcces($bilan['codes'], count($restant))) {
+                $this->logProgres('refus d\'acces massif : on passe a la recuperation un par un');
+                $journal[] = 'refus d\'acces massif, tours interrompus';
+                break;
+            }
+        }
+
+        return ['ok' => $ok, 'restant' => $restant, 'journal' => $journal];
+    }
+
+    /**
+     * Les échecs sont-ils majoritairement des refus d'accès (404 ou page HTML) ?
+     * Dans ce cas le problème est l'autorisation, pas la charge : réessayer est vain.
+     */
+    private function refusDAcces(array $codes, int $nbEchecs): bool {
+        $refus = 0;
+        foreach ($codes as $cle => $n) {
+            // Pas le 403 : Google s'en sert AUSSI pour les depassements de quota,
+            // qui, eux, passent a la tentative suivante.
+            if (strpos($cle, 'html') === 0 || strpos($cle, 'http 404') === 0
+                || strpos($cle, 'http 401') === 0) {
+                $refus += $n;
+            }
+        }
+        return $nbEchecs > 0 && ($refus / $nbEchecs) >= 0.7;
+    }
+
+    /**
+     * Un passage de téléchargement, à fenêtre glissante : on garde en permanence
+     * $conc requêtes en vol et on en relance une dès qu'une se termine. (Par lots
+     * figés, chaque lot attendait son membre le plus lent.)
+     *
+     * Les redirections sont suivies À LA MAIN. L'API Drive répond souvent « 302 »
+     * vers son hôte de téléchargement, et curl ne rejoue pas l'en-tête Authorization
+     * sur un autre hôte : la requête arrivait sans jeton et Google servait une PAGE
+     * HTML de connexion, en 200. C'était la panne du 26/08/2026 (« 177x html » dans
+     * le journal, deux tiers des médias jamais récupérés).
+     *
+     * @return array{ok:int, echecs:array, codes:array}
+     */
+    private function fenetreCurl(array $aFaire, array $entetes, string $tmpDir, int $conc): array {
+        $mh = curl_multi_init();
+        $ok = 0;
+        $echecs = [];
+        $codes = [];
+        $enVol = 0;
+        $urls = $aFaire;      // URL d'origine, pour rendre les échecs à l'appelant
+        $sauts = [];          // identifiant => nombre de redirections déjà suivies
+
+        $lancer = function () use (&$aFaire, &$enVol, $mh, $entetes) {
+            $driveId = array_key_first($aFaire);
+            if ($driveId === null) return false;
+            $url = $aFaire[$driveId];
+            unset($aFaire[$driveId]);
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                // Surtout PAS FOLLOWLOCATION : voir le commentaire de la méthode.
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_TIMEOUT => 30,
+                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_USERAGENT => 'Mozilla/5.0',
+                CURLOPT_HTTPHEADER => $entetes,
+                CURLOPT_ENCODING => '',
+                // L'identifiant voyage avec la requête : c'est ce qui permet de savoir
+                // à quel fichier correspond une réponse qui arrive.
+                CURLOPT_PRIVATE => (string)$driveId,
+            ]);
+            curl_multi_add_handle($mh, $ch);
+            $enVol++;
+            return true;
+        };
+
+        while ($enVol < $conc && $lancer()) {}
+
+        do {
+            curl_multi_exec($mh, $actives);
+            if ($actives) curl_multi_select($mh, 0.5);
+
+            while ($info = curl_multi_info_read($mh)) {
+                $ch = $info['handle'];
+                $driveId = (string)curl_getinfo($ch, CURLINFO_PRIVATE);
+                $data = curl_multi_getcontent($ch);
+                $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $urlDemandee = (string)curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+                $erreur = curl_error($ch);
+                $suivante = null;
+                if ($httpCode >= 300 && $httpCode < 400) {
+                    $suivante = $this->urlAbsolue(
+                        (string)curl_getinfo($ch, CURLINFO_REDIRECT_URL), $urlDemandee);
+                }
+                curl_multi_remove_handle($mh, $ch);
+                curl_close($ch);
+                $enVol--;
+
+                // Redirection : on refait la requête nous-mêmes, avec les mêmes
+                // en-têtes (donc avec le jeton), au maximum 3 fois.
+                if ($suivante !== null) {
+                    $sauts[$driveId] = ($sauts[$driveId] ?? 0) + 1;
+                    if ($sauts[$driveId] <= 3) {
+                        $aFaire[$driveId] = $suivante;
+                        $lancer();
+                        continue;
+                    }
+                    $echecs[$driveId] = $urls[$driveId] ?? '';
+                    $codes['trop de redirections'] = ($codes['trop de redirections'] ?? 0) + 1;
+                    $lancer();
+                    continue;
+                }
+
+                // Une page HTML n'est jamais un média : la mettre en cache ferait
+                // embarquer du HTML à la place de l'image dans le .mbz.
+                $debut = ltrim(substr($data ?: '', 0, 64));
+                $estHtml = (stripos($debut, '<!doctype') === 0 || stripos($debut, '<html') === 0);
+
+                if ($data && strlen($data) > 100 && $httpCode >= 200 && $httpCode < 400 && !$estHtml) {
+                    file_put_contents($tmpDir . '/' . $driveId . '_prefetch.bin', $data);
+                    $ok++;
+                } else {
+                    $echecs[$driveId] = $urls[$driveId] ?? '';
+                    if ($erreur !== '') {
+                        $cle = 'curl:' . $erreur;
+                    } elseif ($estHtml) {
+                        // Le code HTTP compte : une page HTML en 200 après une
+                        // redirection, ce n'est pas la même panne qu'un 403.
+                        $cle = 'html ' . $httpCode . ' (' . ($sauts[$driveId] ?? 0) . ' redir.)';
+                    } else {
+                        $cle = 'http ' . $httpCode;
+                    }
+                    $codes[$cle] = ($codes[$cle] ?? 0) + 1;
+                }
+
+                $lancer();   // on relance aussitôt pour garder la fenêtre pleine
+            }
+        } while ($enVol > 0 || !empty($aFaire));
+
+        curl_multi_close($mh);
+        return ['ok' => $ok, 'echecs' => $echecs, 'codes' => $codes];
+    }
+
+    /** Résout l'URL d'une redirection, qu'elle soit absolue ou relative. */
+    private function urlAbsolue(string $cible, string $depuis): ?string {
+        $cible = trim($cible);
+        if ($cible === '') return null;
+        if (preg_match('#^https?://#i', $cible)) return $cible;
+        $p = parse_url($depuis);
+        if (empty($p['scheme']) || empty($p['host'])) return null;
+        $racine = $p['scheme'] . '://' . $p['host'] . (isset($p['port']) ? ':' . $p['port'] : '');
+        return $racine . (strpos($cible, '/') === 0 ? '' : '/') . $cible;
     }
     
     private function generateCompleteBackup() {
@@ -590,6 +827,9 @@ class EleaMbzExporter {
                 } elseif ($activityType === 'resource') {
                     $moduleName = 'resource';
                     $dirPrefix = 'resource';
+                } elseif ($activityType === 'folder') {
+                    $moduleName = 'folder';
+                    $dirPrefix = 'folder';
                 } elseif ($activityType === 'label') {
                     $moduleName = 'label';
                     $dirPrefix = 'label';
@@ -1769,11 +2009,14 @@ class EleaMbzExporter {
                 if ($activityType === 'mapmodules') {
                     $this->generateMapmodulesActivity($activityId, $sectionId, $sIdx, $activity);
                 } elseif ($activityType === 'assign') {
-                    @file_put_contents(TMP_PATH . '/.export_progress.log', date('H:i:s') . " ROUTE: actId=$activityId type=ASSIGN name='{$activity['name']}'\n", FILE_APPEND | LOCK_EX);
+                    $this->logProgres("ROUTE: actId=$activityId type=ASSIGN name='{$activity['name']}'");
                     $this->generateAssignActivity($activityId, $sectionId, $sIdx, $activity);
                 } elseif ($activityType === 'resource') {
-                    @file_put_contents(TMP_PATH . '/.export_progress.log', date('H:i:s') . " ROUTE: actId=$activityId type=RESOURCE name='{$activity['name']}'\n", FILE_APPEND | LOCK_EX);
+                    $this->logProgres("ROUTE: actId=$activityId type=RESOURCE name='{$activity['name']}'");
                     $this->generateResourceActivity($activityId, $sectionId, $sIdx, $activity);
+                } elseif ($activityType === 'folder') {
+                    $this->logProgres("ROUTE: actId=$activityId type=FOLDER name='{$activity['name']}'");
+                    $this->generateFolderActivity($activityId, $sectionId, $sIdx, $activity);
                 } elseif ($activityType === 'label') {
                     $this->generateLabelActivity($activityId, $sectionId, $sIdx, $activity);
                 } elseif ($activityType === 'page') {
@@ -2061,8 +2304,7 @@ class EleaMbzExporter {
             
             $localPath = $this->resolveImagePath($fileUrl);
             error_log("[EXPORT-ASSIGN] fileUrl=" . substr($fileUrl, 0, 150) . " fileName=$fileName resolved=" . ($localPath ?: 'NULL') . " exists=" . ($localPath && file_exists($localPath) ? 'YES(' . filesize($localPath) . ')' : 'NO'));
-            $progressLog = TMP_PATH . '/.export_progress.log';
-            @file_put_contents($progressLog, date('H:i:s') . " ASSIGN: $fileName → " . ($localPath && file_exists($localPath) ? 'OK' : 'FAIL') . " url=" . substr($fileUrl, 0, 80) . "\n", FILE_APPEND | LOCK_EX);
+                $this->logProgres("ASSIGN: $fileName → " . ($localPath && file_exists($localPath) ? 'OK' : 'FAIL') . ' url=' . substr($fileUrl, 0, 80));
             if ($localPath && file_exists($localPath)) {
                 $contenthash = sha1_file($localPath);
                 $filesize = filesize($localPath);
@@ -2366,8 +2608,7 @@ class EleaMbzExporter {
             
             $localPath = $this->resolveImagePath($fileUrl);
             error_log("[EXPORT-RESOURCE] fileUrl=" . substr($fileUrl, 0, 150) . " fileName=$fileName resolved=" . ($localPath ?: 'NULL') . " exists=" . ($localPath && file_exists($localPath) ? 'YES(' . filesize($localPath) . ')' : 'NO'));
-            $progressLog = TMP_PATH . '/.export_progress.log';
-            @file_put_contents($progressLog, date('H:i:s') . " RESOURCE: $fileName → " . ($localPath && file_exists($localPath) ? 'OK' : 'FAIL') . " url=" . substr($fileUrl, 0, 80) . "\n", FILE_APPEND | LOCK_EX);
+                $this->logProgres("RESOURCE: $fileName → " . ($localPath && file_exists($localPath) ? 'OK' : 'FAIL') . ' url=' . substr($fileUrl, 0, 80));
             if ($localPath && file_exists($localPath)) {
                 $contenthash = sha1_file($localPath);
                 $filesize = filesize($localPath);
@@ -2496,6 +2737,158 @@ class EleaMbzExporter {
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<filters>\n  <filter_actives>\n  </filter_actives>\n  <filter_configs>\n  </filter_configs>\n</filters>");
     }
     
+    /**
+     * Dossier (module Moodle « folder ») : plusieurs fichiers mis à disposition des
+     * élèves. Même plomberie que la ressource, mais composant mod_folder et un
+     * folder.xml qui porte les options d'affichage d'Éléa (dossier déplié + bouton
+     * « Télécharger le dossier »).
+     */
+    private function generateFolderActivity($activityId, $sectionId, $sectionNumber, $activity) {
+        $activityDir = 'activities/folder_' . $activityId;
+        mkdir($this->exportDir . '/' . $activityDir, 0777, true);
+
+        $contextId = $this->contextId + $activityId + 1;
+        $folderId  = $activityId + 7000;
+        $name      = $this->xmlEncode($activity['name'] ?? 'Dossier');
+        $now       = time();
+        $fileIds   = [];
+        $sortOrder = 1;
+
+        foreach ($activity['files'] ?? [] as $f) {
+            $fileUrl  = $f['fileUrl']  ?? null;
+            $fileName = $f['fileName'] ?? null;
+            if (!$fileUrl || !$fileName) continue;
+
+            $localPath = $this->resolveImagePath($fileUrl);
+            $this->logProgres("FOLDER: $fileName → " . ($localPath && file_exists($localPath) ? 'OK' : 'FAIL')
+                . ' url=' . substr($fileUrl, 0, 80));
+            if (!$localPath || !file_exists($localPath)) {
+                // Même signalement que partout ailleurs : un fichier introuvable rendrait
+                // le dossier incomplet sans que personne ne le voie.
+                $this->logExport("Fichier du dossier introuvable, absent du .mbz : $fileName");
+                error_log("EleaMbzExporter: fichier de dossier INTROUVABLE : $fileName");
+                continue;
+            }
+
+            $contenthash = sha1_file($localPath);
+            $filesize    = filesize($localPath);
+            $mime        = $this->getMoodleMimetype($fileName);
+
+            $hashPrefix  = substr($contenthash, 0, 2);
+            $filesSubDir = $this->exportDir . '/files/' . $hashPrefix;
+            if (!is_dir($filesSubDir)) mkdir($filesSubDir, 0777, true);
+            copy($localPath, $filesSubDir . '/' . $contenthash);
+
+            $fid = $this->fileId++;
+            $fileIds[] = $fid;
+            $this->filesManifest[] = [
+                'id' => $fid,
+                'contenthash' => $contenthash,
+                'contextid' => $contextId,
+                'component' => 'mod_folder',
+                'filearea' => 'content',
+                'itemid' => 0,
+                'filepath' => '/',
+                'filename' => $fileName,
+                'filesize' => $filesize,
+                'mimetype' => $mime,
+                'sortorder' => $sortOrder++,
+                'source' => $fileName,
+                'license' => 'unknown',
+            ];
+
+            $this->archiveIndex[] = "files/\td\t0\t?";
+            $this->archiveIndex[] = "files/{$hashPrefix}/\td\t0\t?";
+            $this->archiveIndex[] = "files/{$hashPrefix}/{$contenthash}\tf\t{$filesize}\t" . $this->backupDate;
+        }
+
+        // Entrée « répertoire » de la zone content : Moodle l'attend, sinon le dossier
+        // est restauré vide.
+        $dirFid = $this->fileId++;
+        $fileIds[] = $dirFid;
+        $this->filesManifest[] = [
+            'id' => $dirFid,
+            'contenthash' => 'da39a3ee5e6b4b0d3255bfef95601890afd80709',
+            'contextid' => $contextId,
+            'component' => 'mod_folder',
+            'filearea' => 'content',
+            'itemid' => 0,
+            'filepath' => '/',
+            'filename' => '.',
+            'filesize' => 0,
+            'mimetype' => '$@NULL@$',
+        ];
+
+        // Description et ses images
+        $introXml = $this->inlineHtmlFiles($activity['intro'] ?? '', $contextId,
+                                           'mod_folder', 'intro', $fileIds);
+
+        $folderXml = '<?xml version="1.0" encoding="UTF-8"?>
+<activity id="' . $folderId . '" moduleid="' . $activityId . '" modulename="folder" contextid="' . $contextId . '">
+  <folder id="' . $folderId . '">
+    <name>' . $name . '</name>
+    <intro>' . $this->xmlEncode($introXml) . '</intro>
+    <introformat>1</introformat>
+    <revision>1</revision>
+    <timemodified>' . $now . '</timemodified>
+    <display>0</display>
+    <showexpanded>1</showexpanded>
+    <showdownloadfolder>1</showdownloadfolder>
+    <forcedownload>1</forcedownload>
+  </folder>
+</activity>';
+        $this->writeFile($activityDir . '/folder.xml', $folderXml);
+
+        $moduleXml = '<?xml version="1.0" encoding="UTF-8"?>
+<module id="' . $activityId . '" version="2024100700">
+  <modulename>folder</modulename>
+  <sectionid>' . $sectionId . '</sectionid>
+  <sectionnumber>' . $sectionNumber . '</sectionnumber>
+  <idnumber></idnumber>
+  <added>' . $now . '</added>
+  <score>0</score>
+  <indent>0</indent>
+  <visible>' . ($activity['_moduleVisible'] ?? 1) . '</visible>
+  <visibleoncoursepage>1</visibleoncoursepage>
+  <visibleold>' . ($activity['_moduleVisibleold'] ?? 1) . '</visibleold>
+  <groupmode>0</groupmode>
+  <groupingid>0</groupingid>
+  <completion>0</completion>
+  <completiongradeitemnumber>$@NULL@$</completiongradeitemnumber>
+  <completionpassgrade>0</completionpassgrade>
+  <completionview>0</completionview>
+  <completionexpected>0</completionexpected>
+  <availability>$@NULL@$</availability>
+  <showdescription>0</showdescription>
+  <downloadcontent>1</downloadcontent>
+  <lang></lang>
+  <tags>
+  </tags>
+</module>';
+        $this->writeFile($activityDir . '/module.xml', $moduleXml);
+
+        $this->writeFile($activityDir . '/grades.xml',
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<activity_gradebook>\n  <grade_items>\n  </grade_items>\n  <grade_letters>\n  </grade_letters>\n</activity_gradebook>");
+
+        $filerefXml = '';
+        if (!empty($fileIds)) {
+            $filerefXml = "\n  <fileref>";
+            foreach ($fileIds as $fid) {
+                $filerefXml .= "\n    <file>\n      <id>{$fid}</id>\n    </file>";
+            }
+            $filerefXml .= "\n  </fileref>";
+        }
+        $this->writeFile($activityDir . '/inforef.xml',
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<inforef>{$filerefXml}\n</inforef>");
+
+        $this->writeFile($activityDir . '/grade_history.xml',
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<grade_history>\n  <grade_grades>\n  </grade_grades>\n</grade_history>");
+        $this->writeFile($activityDir . '/roles.xml',
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<roles>\n  <role_overrides>\n  </role_overrides>\n  <role_assignments>\n  </role_assignments>\n</roles>");
+        $this->writeFile($activityDir . '/filters.xml',
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<filters>\n  <filter_actives>\n  </filter_actives>\n  <filter_configs>\n  </filter_configs>\n</filters>");
+    }
+
     /**
      * Réécrit un HTML de l'éditeur pour Moodle : chaque image servie par
      * serve_upload est copiée dans l'archive, déclarée dans files.xml pour la zone
@@ -3886,7 +4279,9 @@ class EleaMbzExporter {
             $aid = $this->answerId++;
             $fraction = ($ans['correct'] ?? false) ? $correctFraction : '0.0000000';
             $text = $ans['text'] ?? '';
-            if (!empty($text) && strpos($text, '<') === false) {
+            // $text !== '' et non !empty() : une réponse dont l'intitulé est « 0 »
+            // est légitime, et empty('0') vaut vrai.
+            if ($text !== '' && strpos($text, '<') === false) {
                 $text = '<p>' . htmlspecialchars($text) . '</p>';
             }
             // Une réponse peut contenir une image : l'embarquer comme Éléa, en filearea

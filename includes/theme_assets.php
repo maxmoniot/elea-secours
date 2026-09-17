@@ -11,5 +11,11 @@
  */
 ?>
 <script>(function(){try{var t=localStorage.getItem('elea-theme');var d=t?t==='dark':(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.setAttribute('data-theme',d?'dark':'light');}catch(e){}})();</script>
-<link rel="stylesheet" href="assets/css/dark.css">
-<script src="assets/js/theme.js" defer></script>
+<?php
+// Empreinte de version : sans elle, le navigateur d'un élève garde la feuille de style
+// mise en cache après un envoi FTP et continue d'afficher l'ancien rendu.
+$__themeV = @filemtime(__DIR__ . '/../assets/css/dark.css') ?: 0;
+$__themeJsV = @filemtime(__DIR__ . '/../assets/js/theme.js') ?: 0;
+?>
+<link rel="stylesheet" href="assets/css/dark.css?v=<?= $__themeV ?>">
+<script src="assets/js/theme.js?v=<?= $__themeJsV ?>" defer></script>
