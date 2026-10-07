@@ -9,7 +9,8 @@ class CourseRenderer {
     private string $baseUrl;
     private bool $printMode = false;
     private ?array $fileIndex = null;
-    private string $downloadBaseUrl = '';
+    private string $downloadCourse = '';
+    private string $downloadType = 'permanent';
 
     public function __construct(array $courseData, string $basePath, string $baseUrl) {
         $this->courseData = $courseData;
@@ -19,44 +20,41 @@ class CourseRenderer {
     }
 
     /**
-     * Base d'URL des fichiers qu'un élève TÉLÉCHARGE (activité « Dossier »), quand le
-     * cours est servi par notre domaine (dossier du cours, file.php…).
+     * Cours dont on sert les fichiers à TÉLÉCHARGER (activités Fichier, Dossier, Devoir).
+     * $type : 'permanent' (cours du Drive, identifiant = fileId du .mbz) ou 'temp' (cours
+     * déposé, identifiant = son dossier dans courses/).
      */
-    public function setDownloadBaseUrl(string $url): void {
-        $this->downloadBaseUrl = $url;
+    public function setDownloadContext(string $courseId, string $type): void {
+        $this->downloadCourse = $courseId;
+        $this->downloadType = ($type === 'temp') ? 'temp' : 'permanent';
     }
 
     /**
-     * URL de téléchargement d'un fichier de dossier, avec l'info « même origine ».
+     * URL de téléchargement d'un fichier, avec l'info « même origine ».
      *
-     * Deux situations :
-     *  - cours servi par notre domaine → URL locale : l'attribut `download` impose le nom
-     *    du fichier, et le navigateur peut lire les octets (archive « tout télécharger ») ;
-     *  - cours servi directement depuis Google Drive → on demande à Drive le
-     *    TÉLÉCHARGEMENT (`export=download`) et non l'aperçu, pour que le fichier arrive
-     *    avec son vrai nom. Mais c'est une AUTRE origine : le navigateur refuse d'en lire
-     *    les octets, donc pas d'archive possible — le lecteur enchaîne alors les
-     *    téléchargements un par un.
+     * Avec un contexte de cours, tout passe par file_download.php (même domaine que la page) :
+     * il retrouve le fichier AU MOMENT DU CLIC — copie locale si elle existe encore, sinon
+     * Drive — et le renvoie sous son vrai nom. Les deux URL d'avant cassaient :
+     *  - le lien direct vers Drive livrait le fichier sous son EMPREINTE (« 4153….txt » pour
+     *    un .hex) : Drive le range ainsi, et ignore l'attribut `download` d'une autre origine ;
+     *  - le lien vers la copie locale d'un cours déposé répondait 404 dès que le cours avait
+     *    fini de partir sur Drive (le dossier local est alors supprimé).
+     * Même origine : le « tout télécharger » d'un Dossier peut lire les octets pour le ZIP.
      *
      * @return array{url:string,sameOrigin:bool}
      */
     private function getDownloadUrl(string $hash, string $filename): array {
-        if ($this->fileIndex && isset($this->fileIndex['files'][$hash])) {
-            return [
-                'url' => 'https://drive.google.com/uc?id=' . $this->fileIndex['files'][$hash] . '&export=download',
-                'sameOrigin' => false,
-            ];
+        if ($this->downloadCourse !== '' && preg_match('/^[0-9a-f]{40}$/i', $hash)) {
+            $query = http_build_query([
+                'c' => $this->downloadCourse,
+                't' => $this->downloadType,
+                'h' => strtolower($hash),
+                'n' => $filename,
+            ], '', '&', PHP_QUERY_RFC3986);
+            return ['url' => 'file_download.php?' . $query, 'sameOrigin' => true];
         }
-        if ($this->downloadBaseUrl === '') {
-            return ['url' => $this->getFileUrl($hash), 'sameOrigin' => false];
-        }
-        // `files/<2 premiers caractères>/<sha1>` : que des caractères sûrs en URL.
-        $path = 'files/' . substr($hash, 0, 2) . '/' . $hash;
-        // Les bases « …php?…&file= » se complètent, un dossier se préfixe avec un /
-        $url = (strpos($this->downloadBaseUrl, '?') !== false)
-            ? $this->downloadBaseUrl . $path
-            : rtrim($this->downloadBaseUrl, '/') . '/' . $path;
-        return ['url' => $url, 'sameOrigin' => true];
+        // Sans contexte (impression PDF…) : l'adresse d'affichage du fichier.
+        return ['url' => $this->getFileUrl($hash), 'sameOrigin' => false];
     }
     
     public function setPrintMode(bool $mode): void {
@@ -4035,7 +4033,7 @@ class CourseRenderer {
             foreach ($contentFiles as $f) {
                 if (!empty($f['hash']) && ($f['filename'] ?? '.') !== '.') {
                     $downloadFiles[] = [
-                        'url' => $this->getFileUrl($f['hash']),
+                        'url' => $this->getDownloadUrl($f['hash'], (string)$f['filename'])['url'],
                         'name' => $f['filename'],
                     ];
                 }
@@ -4044,7 +4042,7 @@ class CourseRenderer {
         // Fallback MBZ : main_file seul
         elseif ($mainFile && !empty($mainFile['hash']) && ($mainFile['filename'] ?? '.') !== '.') {
             $downloadFiles[] = [
-                'url' => $this->getFileUrl($mainFile['hash']),
+                'url' => $this->getDownloadUrl($mainFile['hash'], (string)$mainFile['filename'])['url'],
                 'name' => $mainFile['filename'],
             ];
         }
@@ -4180,11 +4178,11 @@ class CourseRenderer {
         if (!empty($contentFiles)) {
             foreach ($contentFiles as $f) {
                 if (!empty($f['hash']) && ($f['filename'] ?? '.') !== '.') {
-                    $downloadFiles[] = ['url' => $this->getFileUrl($f['hash']), 'name' => $f['filename']];
+                    $downloadFiles[] = ['url' => $this->getDownloadUrl($f['hash'], (string)$f['filename'])['url'], 'name' => $f['filename']];
                 }
             }
         } elseif ($mainFile && !empty($mainFile['hash']) && ($mainFile['filename'] ?? '.') !== '.') {
-            $downloadFiles[] = ['url' => $this->getFileUrl($mainFile['hash']), 'name' => $mainFile['filename']];
+            $downloadFiles[] = ['url' => $this->getDownloadUrl($mainFile['hash'], (string)$mainFile['filename'])['url'], 'name' => $mainFile['filename']];
         }
 
         // Fichiers depuis l'éditeur (format {fileUrl, fileName})

@@ -1,9 +1,26 @@
-# Éléa-Secours — dossier de DONNÉES (fichiers déposés, cache, extractions).
-# Rien ici ne doit jamais être exécuté : ces fichiers viennent d'un dépôt utilisateur.
-# Sans cette règle, un fichier « .php » déposé dans une activité (Dossier, Fichiers à
-# distribuer, Travail à déposer) atterrissait à une adresse devinable et s'exécutait.
+# Éléa-Secours — dossier de DONNÉES (fichiers déposés, cache, cours décompressés).
 
+# 1) Rien ici ne doit jamais être EXÉCUTÉ : ces fichiers viennent d'un dépôt utilisateur.
+#    Sans cette règle, un fichier « .php » déposé dans une activité (Dossier, Fichiers à
+#    distribuer, Travail à déposer) atterrissait à une adresse devinable et s'exécutait.
 <FilesMatch "\.(php|php3|php4|php5|php7|php8|phps|pht|phtml|shtml|cgi|pl|py|rb|jsp|asp|aspx|exe|bat|cmd|sh|so|htaccess|htpasswd)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order deny,allow
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# 2) Un cours décompressé n'est servi que par ses FICHIERS (files/xx/<empreinte>, sans
+#    extension). Sa STRUCTURE reste privée : questions.xml est le corrigé de toutes les
+#    évaluations, les XML de sections/activités contiennent ce qui est caché aux élèves,
+#    files.xml donne l'adresse de chaque fichier. Elle restait téléchargeable tant que le
+#    cours n'avait pas fini de partir sur Drive — et indéfiniment si l'envoi échouait.
+#    Rien dans l'application ne lit ces fichiers par le web : le serveur les lit sur le
+#    disque (analyse du .mbz, envoi vers Drive), donc ce refus ne gêne aucun traitement.
+<FilesMatch "(\.(xml|mbz|zip|gz|tar|log|lock|bak|ini)$|^\.)">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>

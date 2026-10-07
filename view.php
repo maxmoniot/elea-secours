@@ -73,6 +73,38 @@ function loadGdriveCourse(string $fileId): array {
     return [$courseData, $basePath, $baseUrl, true];
 }
 
+/**
+ * Cours DÉPOSÉ (temporaire) ouvert par un code ou un lien élève.
+ * Une fois son envoi sur Drive terminé, il est servi depuis Drive (index temp_<id>.json) et
+ * son dossier courses/<id> est SUPPRIMÉ : ne chercher que ce dossier rendait le code élève
+ * inutilisable (« Cours non trouvé ») dès la fin de l'envoi. Même ordre que l'ouverture par
+ * le professeur (?id=) : Drive d'abord, copie locale sinon.
+ * Retourne [courseData, basePath, baseUrl], ou null si le cours n'existe plus.
+ */
+function loadTempCourseForStudent(string $profId): ?array {
+    $tempIndexFile = DRIVE_INDEX_DIR . '/temp_' . $profId . '.json';
+    $tempDataFile = DRIVE_INDEX_DIR . '/temp_' . $profId . '_data.json';
+    if (file_exists($tempIndexFile) && file_exists($tempDataFile)) {
+        $fileIndex = json_decode(file_get_contents($tempIndexFile), true);
+        $courseData = json_decode(file_get_contents($tempDataFile), true);
+        if ($courseData && $fileIndex) {
+            $courseData['file_index'] = $fileIndex;
+            $courseData['drive_direct'] = true;
+            return [$courseData, '', ''];
+        }
+    }
+    $coursePath = COURSES_PATH . '/' . $profId;
+    $dataFile = $coursePath . '/course_data.json';
+    if (is_dir($coursePath) && file_exists($dataFile)) {
+        $courseData = json_decode(file_get_contents($dataFile), true);
+        if ($courseData) {
+            $courseData['extract_path'] = $coursePath;
+            return [$courseData, $coursePath, 'courses/' . $profId];
+        }
+    }
+    return null;
+}
+
 $courseData = null;
 $basePath = '';
 $baseUrl = '';
@@ -114,21 +146,11 @@ try {
         
         if ($codeType === 'local') {
             $profId = sanitizeProfName($codeData['local_id']);
-            $coursePath = COURSES_PATH . '/' . $profId;
-            
-            if (!is_dir($coursePath)) {
+            $charge = loadTempCourseForStudent($profId);
+            if (!$charge) {
                 throw new Exception("Cours non trouvé ou expiré");
             }
-            
-            $dataFile = $coursePath . '/course_data.json';
-            if (!file_exists($dataFile)) {
-                throw new Exception("Données du cours non trouvées");
-            }
-            
-            $courseData = json_decode(file_get_contents($dataFile), true);
-            $courseData['extract_path'] = $coursePath;
-            $basePath = $coursePath;
-            $baseUrl = 'courses/' . $profId;
+            [$courseData, $basePath, $baseUrl] = $charge;
             $source = 'token';
             $courseIdentifier = $profId;
             $courseType = 'local';
@@ -171,21 +193,11 @@ try {
         if ($tokenType === 'local') {
             // Token pour cours local
             $profId = sanitizeProfName($tokenData['local_id']);
-            $coursePath = COURSES_PATH . '/' . $profId;
-            
-            if (!is_dir($coursePath)) {
+            $charge = loadTempCourseForStudent($profId);
+            if (!$charge) {
                 throw new Exception("Cours non trouvé ou expiré");
             }
-            
-            $dataFile = $coursePath . '/course_data.json';
-            if (!file_exists($dataFile)) {
-                throw new Exception("Données du cours non trouvées");
-            }
-            
-            $courseData = json_decode(file_get_contents($dataFile), true);
-            $courseData['extract_path'] = $coursePath;
-            $basePath = $coursePath;
-            $baseUrl = 'courses/' . $profId;
+            [$courseData, $basePath, $baseUrl] = $charge;
             $source = 'token';
             $courseIdentifier = $profId;
             $courseType = 'local';
@@ -319,18 +331,11 @@ if ($error) {
 $isDriveSource = (strpos($baseUrl, 'file_drive.php') !== false);
 $renderer = new CourseRenderer($courseData, $basePath, $baseUrl);
 
-// Base d'URL pour les fichiers TÉLÉCHARGÉS (activité « Dossier »). Elle doit être servie
-// par notre domaine : quand le cours vient de Drive, getFileUrl() renvoie des URL
-// lh3.googleusercontent.com, une autre origine — le navigateur y refuse la lecture des
-// octets (pas de « tout télécharger ») et ignore l'attribut `download` (le fichier
-// arriverait nommé d'après son empreinte). file_drive.php sert les mêmes fichiers depuis
-// chez nous. Les cours locaux, eux, sont déjà servis par notre domaine.
-if ($baseUrl !== '') {
-    $renderer->setDownloadBaseUrl($baseUrl);
-} elseif ($courseIdentifier !== '') {
-    $drivePrefix = ($courseType === 'gdrive') ? 'CoursPermanents' : 'CoursTemporaires';
-    $renderer->setDownloadBaseUrl('file_drive.php?course=' . urlencode($courseIdentifier)
-        . '&prefix=' . $drivePrefix . '&file=');
+// Fichiers TÉLÉCHARGÉS (activités Fichier, Dossier, Devoir) : ils passent par
+// file_download.php, sur notre domaine, qui les retrouve au moment du clic (copie locale ou
+// Drive) et les renvoie sous leur vrai nom. Voir CourseRenderer::getDownloadUrl().
+if ($courseIdentifier !== '') {
+    $renderer->setDownloadContext($courseIdentifier, ($courseType === 'gdrive') ? 'permanent' : 'temp');
 }
 $course = $courseData['course'] ?? [];
 $sections = $courseData['sections'] ?? [];
@@ -373,6 +378,19 @@ foreach ($sections as $sIndex => $section) {
             'name' => $activity['name'] ?? 'Activité',
             'type' => $activity['type'] ?? 'unknown'
         ];
+    }
+}
+
+// Mode élève : ce que le professeur a caché en créant le code n'est PAS ENVOYÉ.
+// Avant, tout le cours partait dans la page et le masquage se faisait en JavaScript,
+// après coup : « Afficher la source » suffisait pour lire l'évaluation cachée — énoncés,
+// bonnes réponses (window.quizData), fichiers. Les emplacements restent (vides) pour que
+// les identifiants positionnels activity-S-A et la navigation ne bougent pas.
+$cacheEleve = [];
+if ($source === 'token' && $hiddenActivities !== '') {
+    foreach (explode(',', $hiddenActivities) as $hid) {
+        $hid = trim($hid);
+        if ($hid !== '') $cacheEleve[$hid] = true;
     }
 }
 
@@ -4243,8 +4261,8 @@ foreach ($sections as $sIndex => $section) {
     // « Tout télécharger » fabrique le ZIP DANS le navigateur, en méthode « stocké »
     // (sans compression : les fichiers d'un dossier sont déjà des PDF, images ou vidéos
     // compressés). Aucune bibliothèque externe, aucun aller-retour serveur de plus.
-    // Les URL viennent de CourseRenderer::setDownloadBaseUrl() : elles sont servies par
-    // notre domaine, donc lisibles par fetch() — une URL Google Drive ne le serait pas.
+    // Les URL viennent de CourseRenderer::getDownloadUrl() (file_download.php) : elles sont
+    // servies par notre domaine, donc lisibles par fetch() — une URL Google Drive ne le serait pas.
 
     var FOLDER_ZIP_MAX_BYTES = 200 * 1024 * 1024;   // au-delà : fichier par fichier
 
@@ -5327,21 +5345,29 @@ foreach ($sections as $sIndex => $section) {
                 <span class="sidebar-title">SOMMAIRE</span>
             </div>
             
-            <?php foreach ($sections as $sIndex => $section): 
+            <?php foreach ($sections as $sIndex => $section):
                 $sectionName = !empty($section['name']) ? $section['name'] : 'Section ' . ($section['number'] + 1);
                 $activities = $section['activities'] ?? [];
+                // Mode élève : une section dont TOUT est caché n'envoie même pas son titre.
+                $sectionCachee = !empty($cacheEleve) && !empty($activities);
+                foreach (array_keys($activities) as $aIdx) {
+                    if (!isset($cacheEleve['activity-' . $sIndex . '-' . $aIdx])) { $sectionCachee = false; break; }
+                }
             ?>
-            <div class="nav-section" data-section="<?= $sIndex ?>">
+            <div class="nav-section<?= $sectionCachee ? ' visibility-hidden' : '' ?>" data-section="<?= $sIndex ?>">
                 <div class="nav-section-header">
                     <span class="nav-section-icon" onclick="toggleSection(this.parentElement)">▼</span>
-                    <span class="section-title" onclick="toggleSection(this.parentElement)"><?= htmlspecialchars($sectionName) ?></span>
+                    <span class="section-title" onclick="toggleSection(this.parentElement)"><?= $sectionCachee ? '' : htmlspecialchars($sectionName) ?></span>
                     <button class="visibility-toggle" onclick="toggleSectionVisibility(<?= $sIndex ?>, event)" title="Afficher/Masquer cette section">👁</button>
                 </div>
                 <ul class="nav-section-list">
-                    <?php foreach ($activities as $aIndex => $activity): 
+                    <?php foreach ($activities as $aIndex => $activity):
                         $itemId = 'activity-' . $sIndex . '-' . $aIndex;
                         $isFirst = ($sIndex === 0 && $aIndex === 0);
                     ?>
+                    <?php if (isset($cacheEleve[$itemId])): ?>
+                    <li class="nav-item visibility-hidden" data-id="<?= $itemId ?>"></li>
+                    <?php continue; endif; ?>
                     <li class="nav-item <?= $isFirst ? 'active' : '' ?>" data-id="<?= $itemId ?>">
                         <span class="nav-completion-indicator"></span>
                         <span class="nav-link" onclick="showActivity('<?= $itemId ?>')">
@@ -5389,9 +5415,13 @@ foreach ($sections as $sIndex => $section) {
                         $itemId = 'activity-' . $sIndex . '-' . $aIndex;
                         $isFirst = ($sIndex === 0 && $aIndex === 0);
                     ?>
+                    <?php if (isset($cacheEleve[$itemId])): ?>
+                    <div class="activity-wrapper visibility-hidden" id="<?= $itemId ?>"></div>
+                    <?php else: ?>
                     <div class="activity-wrapper <?= $isFirst ? 'active' : '' ?>" id="<?= $itemId ?>">
                         <?= $renderer->renderSingleActivity($activity) ?>
                     </div>
+                    <?php endif; ?>
                     <?php endforeach; ?>
                 <?php endforeach; ?>
             </div>
