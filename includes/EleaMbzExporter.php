@@ -7445,7 +7445,7 @@ class EleaMbzExporter {
         $override = $content['override'] ?? [];
         if (!isset($override['activeSurface'])) $override['activeSurface'] = false;
         if (!isset($override['hideSummarySlide'])) $override['hideSummarySlide'] = false;
-        if (!isset($override['summarySlideSolutionButton'])) $override['summarySlideSolutionButton'] = true;
+        if (!isset($override['summarySlideSolutionButton'])) $override['summarySlideSolutionButton'] = false;   // Max 13/10/2026 : pas de « Voir la correction » sur le résumé
         if (!isset($override['summarySlideRetryButton'])) $override['summarySlideRetryButton'] = true;
         if (!isset($override['enablePrintButton'])) $override['enablePrintButton'] = false;
         

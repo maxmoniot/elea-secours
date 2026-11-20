@@ -746,7 +746,7 @@ class ImageManager {
             'override' => [
                 'activeSurface' => false,
                 'hideSummarySlide' => false,
-                'summarySlideSolutionButton' => true,
+                'summarySlideSolutionButton' => false,   // Max 13/10/2026 : pas de « Voir la correction » sur le résumé
                 'summarySlideRetryButton' => true,
                 'enablePrintButton' => false,
                 'social' => [
